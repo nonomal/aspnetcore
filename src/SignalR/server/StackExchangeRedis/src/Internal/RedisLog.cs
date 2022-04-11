@@ -52,6 +52,9 @@ internal static partial class RedisLog
     [LoggerMessage(11, LogLevel.Warning, "Error processing message for internal server message.", EventName = "InternalMessageFailed")]
     public static partial void InternalMessageFailed(ILogger logger, Exception exception);
 
+    [LoggerMessage(12, LogLevel.Error, "Error connecting to Redis.", EventName = "ErrorConnecting")]
+    public static partial void ErrorConnecting(ILogger logger, Exception ex);
+
     // This isn't DefineMessage-based because it's just the simple TextWriter logging from ConnectionMultiplexer
     public static void ConnectionMultiplexerMessage(ILogger logger, string? message)
     {
