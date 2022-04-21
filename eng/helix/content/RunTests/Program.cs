@@ -17,7 +17,7 @@ namespace RunTests
                 var keepGoing = runner.SetupEnvironment();
                 if (keepGoing)
                 {
-                    keepGoing = await runner.InstallDotnetToolsAsync();
+                    keepGoing = await runner.InstallDotnetToolsAsync().ConfigureAwait(false);
                 }
 #if INSTALLPLAYWRIGHT
                 if (keepGoing)
@@ -32,14 +32,14 @@ namespace RunTests
 
                 if (keepGoing)
                 {
-                    if (!await runner.CheckTestDiscoveryAsync())
+                    if (!await runner.CheckTestDiscoveryAsync().ConfigureAwait(false))
                     {
                         Console.WriteLine("RunTest stopping due to test discovery failure.");
                         Environment.Exit(1);
                         return;
                     }
 
-                    var exitCode = await runner.RunTestsAsync();
+                    var exitCode = await runner.RunTestsAsync().ConfigureAwait(false);
                     runner.UploadResults();
                     Console.WriteLine($"Completed Helix job with exit code '{exitCode}'");
                     Environment.Exit(exitCode);
@@ -50,7 +50,7 @@ namespace RunTests
             }
             catch (Exception e)
             {
-                Console.WriteLine($"RunTests uncaught exception: {e.ToString()}");
+                Console.WriteLine($"RunTests uncaught exception: {e}");
                 Environment.Exit(1);
             }
         }

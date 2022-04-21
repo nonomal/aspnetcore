@@ -95,7 +95,6 @@ namespace RunTests
                 EnableRaisingEvents = true
             };
 
-
             if (workingDirectory != null)
             {
                 process.StartInfo.WorkingDirectory = workingDirectory;
@@ -171,9 +170,9 @@ namespace RunTests
             process.BeginErrorReadLine();
 
             var canceledTcs = new TaskCompletionSource<object?>();
-            await using var _ = cancellationToken.Register(() => canceledTcs.TrySetResult(null));
+            await using var _ = cancellationToken.Register(() => canceledTcs.TrySetResult(null)).ConfigureAwait(false);
 
-            var result = await Task.WhenAny(processLifetimeTask.Task, canceledTcs.Task);
+            var result = await Task.WhenAny(processLifetimeTask.Task, canceledTcs.Task).ConfigureAwait(false);
 
             if (result == canceledTcs.Task)
             {
@@ -181,7 +180,7 @@ namespace RunTests
                 {
                     var dumpFilePath = Path.Combine(dumpDirectoryPath, $"{Path.GetFileName(filename)}.{process.Id}.dmp");
                     // Capture a process dump if the dumpDirectory is set
-                    await CaptureDumpAsync(process.Id, dumpFilePath);
+                    await CaptureDumpAsync(process.Id, dumpFilePath).ConfigureAwait(false);
                 }
 
                 if (!OperatingSystem.IsWindows())
@@ -190,7 +189,7 @@ namespace RunTests
 
                     var cancel = new CancellationTokenSource();
 
-                    await Task.WhenAny(processLifetimeTask.Task, Task.Delay(TimeSpan.FromSeconds(5), cancel.Token));
+                    await Task.WhenAny(processLifetimeTask.Task, Task.Delay(TimeSpan.FromSeconds(5), cancel.Token)).ConfigureAwait(false);
 
                     cancel.Cancel();
                 }
@@ -206,7 +205,7 @@ namespace RunTests
                 }
             }
 
-            return await processLifetimeTask.Task;
+            return await processLifetimeTask.Task.ConfigureAwait(false);
         }
     }
 }
