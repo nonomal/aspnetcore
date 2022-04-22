@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <IsUnitTestProject Condition=" '$(SkipTestBuild)' != 'true' ">true</IsUnitTestProject>
+    <IsUnitTestProject>false</IsUnitTestProject>
   </PropertyGroup>
 
   <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
