@@ -1,2 +1,3 @@
 #nullable enable
 Microsoft.AspNetCore.Http.EndpointMetadataCollection.GetRequiredMetadata<T>() -> T! (forwarded, contained in Microsoft.AspNetCore.Http.Abstractions)
+Microsoft.AspNetCore.Routing.RouteData.RouteDataSnapshot.RouteDataSnapshot() -> void
