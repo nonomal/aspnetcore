@@ -74,7 +74,7 @@ namespace RunTests
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception in SetupEnvironment: {e}");
+                Console.WriteLine($"Exception in SetupEnvironment: {e.ToString()}");
                 return false;
             }
         }
@@ -97,7 +97,7 @@ namespace RunTests
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception in DisplayContents: {e}");
+                Console.WriteLine($"Exception in DisplayContents: {e.ToString()}");
             }
         }
 
@@ -132,7 +132,7 @@ namespace RunTests
                     outputDataReceived: Console.WriteLine,
                     errorDataReceived: Console.Error.WriteLine,
                     throwOnError: false,
-                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token).ConfigureAwait(false);
+                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token);
 
                 Console.WriteLine($"Adding current directory to nuget sources: {Options.HELIX_WORKITEM_ROOT}");
 
@@ -142,7 +142,7 @@ namespace RunTests
                     outputDataReceived: Console.WriteLine,
                     errorDataReceived: Console.Error.WriteLine,
                     throwOnError: false,
-                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token).ConfigureAwait(false);
+                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token);
 
                 // Write nuget sources to console, useful for debugging purposes
                 await ProcessUtil.RunAsync($"{Options.DotnetRoot}/dotnet",
@@ -151,7 +151,7 @@ namespace RunTests
                     outputDataReceived: Console.WriteLine,
                     errorDataReceived: Console.Error.WriteLine,
                     throwOnError: false,
-                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token).ConfigureAwait(false);
+                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token);
 
                 await ProcessUtil.RunAsync($"{Options.DotnetRoot}/dotnet",
                     $"tool install dotnet-ef --version {Options.EfVersion} --tool-path {Options.HELIX_WORKITEM_ROOT}",
@@ -159,7 +159,7 @@ namespace RunTests
                     outputDataReceived: Console.WriteLine,
                     errorDataReceived: Console.Error.WriteLine,
                     throwOnError: false,
-                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token).ConfigureAwait(false);
+                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token);
 
                 await ProcessUtil.RunAsync($"{Options.DotnetRoot}/dotnet",
                     $"tool install dotnet-serve --tool-path {Options.HELIX_WORKITEM_ROOT}",
@@ -167,7 +167,7 @@ namespace RunTests
                     outputDataReceived: Console.WriteLine,
                     errorDataReceived: Console.Error.WriteLine,
                     throwOnError: false,
-                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token).ConfigureAwait(false);
+                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token);
 
                 return true;
             }
@@ -186,7 +186,7 @@ namespace RunTests
                 var discoveryResult = await ProcessUtil.RunAsync($"{Options.DotnetRoot}/dotnet",
                     $"vstest {Options.Target} -lt",
                     environmentVariables: EnvironmentVariables,
-                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token).ConfigureAwait(false);
+                    cancellationToken: new CancellationTokenSource(TimeSpan.FromMinutes(2)).Token);
 
                 if (discoveryResult.StandardOutput.Contains("Exception thrown"))
                 {
@@ -198,7 +198,7 @@ namespace RunTests
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception in CheckTestDiscovery: {e}");
+                Console.WriteLine($"Exception in CheckTestDiscovery: {e.ToString()}");
                 return false;
             }
         }
@@ -223,7 +223,7 @@ namespace RunTests
                         outputDataReceived: Console.WriteLine,
                         errorDataReceived: Console.Error.WriteLine,
                         throwOnError: false,
-                        cancellationToken: cts.Token).ConfigureAwait(false);
+                        cancellationToken: cts.Token);
 
                     if (result.ExitCode != 0)
                     {
@@ -241,7 +241,7 @@ namespace RunTests
                         outputDataReceived: Console.WriteLine,
                         errorDataReceived: Console.Error.WriteLine,
                         throwOnError: false,
-                        cancellationToken: cts.Token).ConfigureAwait(false);
+                        cancellationToken: cts.Token);
 
                     if (result.ExitCode != 0)
                     {
@@ -252,7 +252,7 @@ namespace RunTests
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception in RunTests: {e}");
+                Console.WriteLine($"Exception in RunTests: {e.ToString()}");
                 exitCode = 1;
             }
             return exitCode;
