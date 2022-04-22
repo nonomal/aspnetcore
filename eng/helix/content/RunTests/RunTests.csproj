@@ -5,8 +5,6 @@
     <TargetFramework>net7.0</TargetFramework>
     <DefineConstants Condition=" '$(InstallPlaywright)' == 'true' ">$(DefineConstants);INSTALLPLAYWRIGHT</DefineConstants>
     <NoWarn>$(NoWarn);CA2007;NU5104</NoWarn>
-    <IsUnitTestProject>false</IsUnitTestProject>
-    <IsTestProject>false</IsTestProject>
   </PropertyGroup>
 
   <ItemGroup>
