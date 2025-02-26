@@ -23,15 +23,8 @@ internal sealed class SocketConnectionFactory : IConnectionFactory, IAsyncDispos
 
     public SocketConnectionFactory(IOptions<SocketTransportOptions> options, ILoggerFactory loggerFactory)
     {
-        if (options == null)
-        {
-            throw new ArgumentNullException(nameof(options));
-        }
-
-        if (loggerFactory == null)
-        {
-            throw new ArgumentNullException(nameof(loggerFactory));
-        }
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(loggerFactory);
 
         _options = options.Value;
         _memoryPool = options.Value.MemoryPoolFactory();
@@ -65,7 +58,7 @@ internal sealed class SocketConnectionFactory : IConnectionFactory, IAsyncDispos
             NoDelay = _options.NoDelay
         };
 
-        await socket.ConnectAsync(ipEndPoint);
+        await socket.ConnectAsync(ipEndPoint, cancellationToken);
 
         var socketConnection = new SocketConnection(
             socket,

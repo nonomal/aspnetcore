@@ -4,14 +4,18 @@
 using System.Collections;
 using System.Diagnostics;
 using System.IO.Pipelines;
+using System.Net.Security;
 using System.Runtime.InteropServices;
+using System.Security.Authentication;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.Features.Authentication;
+using Microsoft.AspNetCore.Server.HttpSys;
 using Microsoft.AspNetCore.Server.IIS.Core.IO;
+using Microsoft.AspNetCore.Shared;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Logging;
 
@@ -27,11 +31,14 @@ internal partial class IISHttpContext : IFeatureCollection,
                                         IHttpAuthenticationFeature,
                                         IServerVariablesFeature,
                                         ITlsConnectionFeature,
+                                        ITlsHandshakeFeature,
                                         IHttpBodyControlFeature,
                                         IHttpMaxRequestBodySizeFeature,
                                         IHttpResponseTrailersFeature,
                                         IHttpResetFeature,
-                                        IConnectionLifetimeNotificationFeature
+                                        IConnectionLifetimeNotificationFeature,
+                                        IHttpSysRequestInfoFeature,
+                                        IHttpSysRequestTimingFeature
 {
     private int _featureRevision;
     private string? _httpProtocolVersion;
@@ -261,9 +268,9 @@ internal partial class IISHttpContext : IFeatureCollection,
     }
 
     // Http/2 does not support the upgrade mechanic.
-    // Http/1.x upgrade requests may have a request body, but that's not allowed in our main scenario (WebSockets) and much
+    // Http/1.1 upgrade requests may have a request body, but that's not allowed in our main scenario (WebSockets) and much
     // more complicated to support. See https://tools.ietf.org/html/rfc7230#section-6.7, https://tools.ietf.org/html/rfc7540#section-3.2
-    bool IHttpUpgradeFeature.IsUpgradableRequest => !RequestCanHaveBody && HttpVersion < System.Net.HttpVersion.Version20;
+    bool IHttpUpgradeFeature.IsUpgradableRequest => !RequestCanHaveBody && HttpVersion == System.Net.HttpVersion.Version11;
 
     bool IFeatureCollection.IsReadOnly => false;
 
@@ -279,10 +286,7 @@ internal partial class IISHttpContext : IFeatureCollection,
     {
         get
         {
-            if (string.IsNullOrEmpty(variableName))
-            {
-                throw new ArgumentException($"{nameof(variableName)} should be non-empty string");
-            }
+            ArgumentException.ThrowIfNullOrEmpty(variableName);
 
             // Synchronize access to native methods that might run in parallel with IO loops
             lock (_contextLock)
@@ -292,15 +296,9 @@ internal partial class IISHttpContext : IFeatureCollection,
         }
         set
         {
-            if (string.IsNullOrEmpty(variableName))
-            {
-                throw new ArgumentException($"{nameof(variableName)} should be non-empty string");
-            }
+            ArgumentException.ThrowIfNullOrEmpty(variableName);
 
-            if (value == null)
-            {
-                throw new ArgumentNullException(nameof(value));
-            }
+            ArgumentNullException.ThrowIfNull(value);
 
             // Synchronize access to native methods that might run in parallel with IO loops
             lock (_contextLock)
@@ -340,6 +338,10 @@ internal partial class IISHttpContext : IFeatureCollection,
     {
         if (!((IHttpUpgradeFeature)this).IsUpgradableRequest)
         {
+            if (HttpVersion != System.Net.HttpVersion.Version11)
+            {
+                throw new InvalidOperationException(CoreStrings.UpgradeWithWrongProtocolVersion);
+            }
             throw new InvalidOperationException(CoreStrings.CannotUpgradeNonUpgradableRequest);
         }
 
@@ -402,6 +404,30 @@ internal partial class IISHttpContext : IFeatureCollection,
         }
     }
 
+    SslProtocols ITlsHandshakeFeature.Protocol => Protocol;
+
+    TlsCipherSuite? ITlsHandshakeFeature.NegotiatedCipherSuite => NegotiatedCipherSuite;
+
+    string ITlsHandshakeFeature.HostName => SniHostName;
+
+    [Obsolete(Obsoletions.RuntimeTlsCipherAlgorithmEnumsMessage, DiagnosticId = Obsoletions.RuntimeTlsCipherAlgorithmEnumsDiagId, UrlFormat = Obsoletions.RuntimeSharedUrlFormat)]
+    CipherAlgorithmType ITlsHandshakeFeature.CipherAlgorithm => CipherAlgorithm;
+
+    [Obsolete(Obsoletions.RuntimeTlsCipherAlgorithmEnumsMessage, DiagnosticId = Obsoletions.RuntimeTlsCipherAlgorithmEnumsDiagId, UrlFormat = Obsoletions.RuntimeSharedUrlFormat)]
+    int ITlsHandshakeFeature.CipherStrength => CipherStrength;
+
+    [Obsolete(Obsoletions.RuntimeTlsCipherAlgorithmEnumsMessage, DiagnosticId = Obsoletions.RuntimeTlsCipherAlgorithmEnumsDiagId, UrlFormat = Obsoletions.RuntimeSharedUrlFormat)]
+    HashAlgorithmType ITlsHandshakeFeature.HashAlgorithm => HashAlgorithm;
+
+    [Obsolete(Obsoletions.RuntimeTlsCipherAlgorithmEnumsMessage, DiagnosticId = Obsoletions.RuntimeTlsCipherAlgorithmEnumsDiagId, UrlFormat = Obsoletions.RuntimeSharedUrlFormat)]
+    int ITlsHandshakeFeature.HashStrength => HashStrength;
+
+    [Obsolete(Obsoletions.RuntimeTlsCipherAlgorithmEnumsMessage, DiagnosticId = Obsoletions.RuntimeTlsCipherAlgorithmEnumsDiagId, UrlFormat = Obsoletions.RuntimeSharedUrlFormat)]
+    ExchangeAlgorithmType ITlsHandshakeFeature.KeyExchangeAlgorithm => KeyExchangeAlgorithm;
+
+    [Obsolete(Obsoletions.RuntimeTlsCipherAlgorithmEnumsMessage, DiagnosticId = Obsoletions.RuntimeTlsCipherAlgorithmEnumsDiagId, UrlFormat = Obsoletions.RuntimeSharedUrlFormat)]
+    int ITlsHandshakeFeature.KeyExchangeStrength => KeyExchangeStrength;
+
     IEnumerator<KeyValuePair<Type, object>> IEnumerable<KeyValuePair<Type, object>>.GetEnumerator() => FastEnumerable().GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => FastEnumerable().GetEnumerator();
@@ -440,6 +466,11 @@ internal partial class IISHttpContext : IFeatureCollection,
     internal IHttpResponseTrailersFeature? GetResponseTrailersFeature()
     {
         return AdvancedHttp2FeaturesSupported() ? this : null;
+    }
+
+    internal ITlsHandshakeFeature? GetTlsHandshakeFeature()
+    {
+        return IsHttps ? this : null;
     }
 
     IHeaderDictionary IHttpResponseTrailersFeature.Trailers

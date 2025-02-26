@@ -10,6 +10,8 @@ internal sealed class ProjectCommandLineApplication : CommandLineApplication
 {
     public CommandOption ProjectOption { get; private set; }
 
+    public CommandOption OutputOption { get; private set; }
+
     public IReporter Reporter { get; private set; }
 
     public ProjectCommandLineApplication(IReporter reporter, bool throwOnUnexpectedArg = true, bool continueAfterUnexpectedArg = false, bool treatUnmatchedOptionsAsArguments = false)
@@ -17,8 +19,14 @@ internal sealed class ProjectCommandLineApplication : CommandLineApplication
     {
         ProjectOption = Option(
             "-p|--project",
-            "The path of the project to operate on. Defaults to the project in the current directory",
+            Resources.ProjectOption_Description,
             CommandOptionType.SingleValue);
+
+        OutputOption = Option(
+            "-o|--output",
+            Resources.CreateCommand_OutputOption_Description,
+            CommandOptionType.SingleValue);
+
         Reporter = reporter;
     }
 

@@ -11,10 +11,12 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
-using Microsoft.AspNetCore.Testing;
+using Microsoft.AspNetCore.InternalTesting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Microsoft.AspNetCore.Authentication.Certificate.Test;
 
@@ -24,7 +26,7 @@ public class ClientCertificateAuthenticationTests
     [Fact]
     public async Task VerifySchemeDefaults()
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         services.AddAuthentication().AddCertificate();
         var sp = services.BuildServiceProvider();
         var schemeProvider = sp.GetRequiredService<IAuthenticationSchemeProvider>();
@@ -154,7 +156,7 @@ public class ClientCertificateAuthenticationTests
     }
 
     [ConditionalFact]
-    [SkipOnHelix("https://github.com/dotnet/aspnetcore/issues/32813", Queues = $"All.Ubuntu;{HelixConstants.RedhatAmd64}")]
+    [SkipOnHelix("https://github.com/dotnet/aspnetcore/issues/32813", Queues = $"All.Ubuntu;{HelixConstants.AlmaLinuxAmd64}")]
     public async Task VerifyExpiredSelfSignedFails()
     {
         using var host = await CreateHost(
@@ -189,7 +191,7 @@ public class ClientCertificateAuthenticationTests
     }
 
     [ConditionalFact]
-    [SkipOnHelix("https://github.com/dotnet/aspnetcore/issues/32813", Queues = $"All.Ubuntu;{HelixConstants.RedhatAmd64}")]
+    [SkipOnHelix("https://github.com/dotnet/aspnetcore/issues/32813", Queues = $"All.Ubuntu;{HelixConstants.AlmaLinuxAmd64}")]
     public async Task VerifyNotYetValidSelfSignedFails()
     {
         using var host = await CreateHost(
@@ -687,8 +689,8 @@ public class ClientCertificateAuthenticationTests
     {
         const string Expected = "John Doe";
         var validationCount = 0;
-        var clock = new TestClock();
-        clock.UtcNow = DateTime.UtcNow;
+        // The test certs are generated based off UtcNow.
+        var timeProvider = new FakeTimeProvider(TimeProvider.System.GetUtcNow());
 
         using var host = await CreateHost(
             new CertificateAuthenticationOptions
@@ -715,7 +717,7 @@ public class ClientCertificateAuthenticationTests
                     }
                 }
             },
-            Certificates.SelfSignedValidWithNoEku, null, null, false, "", cache, clock);
+            Certificates.SelfSignedValidWithNoEku, null, null, false, "", cache, timeProvider);
 
         using var server = host.GetTestServer();
         var response = await server.CreateClient().GetAsync("https://example.com/");
@@ -758,7 +760,7 @@ public class ClientCertificateAuthenticationTests
         var expected = cache ? "1" : "2";
         Assert.Equal(expected, count.First().Value);
 
-        clock.Add(TimeSpan.FromMinutes(31));
+        timeProvider.Advance(TimeSpan.FromMinutes(31));
 
         // Third request should always trigger validation even if caching
         response = await server.CreateClient().GetAsync("https://example.com/");
@@ -790,7 +792,7 @@ public class ClientCertificateAuthenticationTests
         bool wireUpHeaderMiddleware = false,
         string headerName = "",
         bool useCache = false,
-        ISystemClock clock = null)
+        TimeProvider timeProvider = null)
     {
         var host = new HostBuilder()
             .ConfigureWebHost(builder =>
@@ -843,7 +845,7 @@ public class ClientCertificateAuthenticationTests
                     AuthenticationBuilder authBuilder;
                     if (configureOptions != null)
                     {
-                        authBuilder = services.AddAuthentication(CertificateAuthenticationDefaults.AuthenticationScheme).AddCertificate(options =>
+                        authBuilder = services.AddAuthentication().AddCertificate(options =>
                         {
                             options.CustomTrustStore = configureOptions.CustomTrustStore;
                             options.ChainTrustValidationMode = configureOptions.ChainTrustValidationMode;
@@ -854,17 +856,29 @@ public class ClientCertificateAuthenticationTests
                             options.RevocationMode = configureOptions.RevocationMode;
                             options.ValidateValidityPeriod = configureOptions.ValidateValidityPeriod;
                             options.AdditionalChainCertificates = configureOptions.AdditionalChainCertificates;
+                            options.TimeProvider = configureOptions.TimeProvider;
+
+                            if (timeProvider != null)
+                            {
+                                options.TimeProvider = timeProvider;
+                            }
                         });
                     }
                     else
                     {
-                        authBuilder = services.AddAuthentication(CertificateAuthenticationDefaults.AuthenticationScheme).AddCertificate();
+                        authBuilder = services.AddAuthentication().AddCertificate(options =>
+                        {
+                            if (timeProvider != null)
+                            {
+                                options.TimeProvider = timeProvider;
+                            }
+                        });
                     }
                     if (useCache)
                     {
-                        if (clock != null)
+                        if (timeProvider != null)
                         {
-                            services.AddSingleton<ICertificateValidationCache>(new CertificateValidationCache(Options.Create(new CertificateValidationCacheOptions()), clock));
+                            services.AddSingleton<ICertificateValidationCache>(new CertificateValidationCache(Options.Create(new CertificateValidationCacheOptions()), timeProvider));
                         }
                         else
                         {
@@ -879,12 +893,6 @@ public class ClientCertificateAuthenticationTests
                             options.CertificateHeader = headerName;
                         });
                     }
-
-                    if (clock != null)
-                    {
-                        services.AddSingleton(clock);
-                    }
-
                 }))
             .Build();
 

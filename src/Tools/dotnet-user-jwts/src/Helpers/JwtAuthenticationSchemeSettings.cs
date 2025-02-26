@@ -4,6 +4,7 @@
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Microsoft.AspNetCore.Authentication.JwtBearer.Tools;
 
@@ -12,21 +13,16 @@ internal sealed record JwtAuthenticationSchemeSettings(string SchemeName, List<s
     private const string AuthenticationKey = "Authentication";
     private const string SchemesKey = "Schemes";
 
-    private static readonly JsonSerializerOptions _jsonSerializerOptions = new JsonSerializerOptions
-    {
-        WriteIndented = true,
-    };
-
     public void Save(string filePath)
     {
         using var reader = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-        var config = JsonSerializer.Deserialize<JsonObject>(reader, _jsonSerializerOptions);
+        var config = JsonSerializer.Deserialize<JsonObject>(reader, JwtSerializerOptions.Default);
         reader.Close();
 
         var settingsObject = new JsonObject
         {
-            [nameof(Audiences)] = new JsonArray(Audiences.Select(aud => JsonValue.Create(aud)).ToArray()),
-            [nameof(ClaimsIssuer)] = ClaimsIssuer
+            [nameof(TokenValidationParameters.ValidAudiences)] = new JsonArray(Audiences.Select(aud => JsonValue.Create(aud)).ToArray()),
+            [nameof(TokenValidationParameters.ValidIssuer)] = ClaimsIssuer
         };
 
         if (config[AuthenticationKey] is JsonObject authentication)
@@ -35,7 +31,7 @@ internal sealed record JwtAuthenticationSchemeSettings(string SchemeName, List<s
             {
                 // If a scheme with the same name has already been registered, we
                 // override with the latest token's options
-                schemes[SchemeName] = settingsObject;    
+                schemes[SchemeName] = settingsObject;
             }
             else
             {
@@ -56,14 +52,19 @@ internal sealed record JwtAuthenticationSchemeSettings(string SchemeName, List<s
             };
         }
 
-        using var writer = new FileStream(filePath, FileMode.Open, FileAccess.Write);
-        JsonSerializer.Serialize(writer, config, _jsonSerializerOptions);
+        var streamOptions = new FileStreamOptions { Access = FileAccess.Write, Mode = FileMode.Create };
+        if (!OperatingSystem.IsWindows())
+        {
+            streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+        using var writer = new FileStream(filePath, streamOptions);
+        JsonSerializer.Serialize(writer, config, JwtSerializerOptions.Default);
     }
 
     public static void RemoveScheme(string filePath, string name)
     {
         using var reader = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-        var config = JsonSerializer.Deserialize<JsonObject>(reader);
+        var config = JsonSerializer.Deserialize<JsonObject>(reader, JwtSerializerOptions.Default);
         reader.Close();
 
         if (config[AuthenticationKey] is JsonObject authentication &&
@@ -73,6 +74,6 @@ internal sealed record JwtAuthenticationSchemeSettings(string SchemeName, List<s
         }
 
         using var writer = new FileStream(filePath, FileMode.Create, FileAccess.Write);
-        JsonSerializer.Serialize(writer, config, _jsonSerializerOptions);
+        JsonSerializer.Serialize(writer, config, JwtSerializerOptions.Default);
     }
 }

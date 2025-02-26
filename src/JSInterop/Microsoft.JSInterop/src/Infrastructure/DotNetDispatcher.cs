@@ -41,7 +41,8 @@ public static class DotNetDispatcher
     /// <param name="invocationInfo">The <see cref="DotNetInvocationInfo"/>.</param>
     /// <param name="argsJson">A JSON representation of the parameters.</param>
     /// <returns>A JSON representation of the return value, or null.</returns>
-    public static string? Invoke(JSRuntime jsRuntime, in DotNetInvocationInfo invocationInfo, string argsJson)
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "We expect application code is configured to ensure return types of JSInvokable methods are retained.")]
+    public static string? Invoke(JSRuntime jsRuntime, in DotNetInvocationInfo invocationInfo, [StringSyntax(StringSyntaxAttribute.Json)] string argsJson)
     {
         // This method doesn't need [JSInvokable] because the platform is responsible for having
         // some way to dispatch calls here. The logic inside here is the thing that checks whether
@@ -70,7 +71,8 @@ public static class DotNetDispatcher
     /// <param name="invocationInfo">The <see cref="DotNetInvocationInfo"/>.</param>
     /// <param name="argsJson">A JSON representation of the parameters.</param>
     /// <returns>A JSON representation of the return value, or null.</returns>
-    public static void BeginInvokeDotNet(JSRuntime jsRuntime, DotNetInvocationInfo invocationInfo, string argsJson)
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "We expect application code is configured to ensure return types of JSInvokable methods are retained.")]
+    public static void BeginInvokeDotNet(JSRuntime jsRuntime, DotNetInvocationInfo invocationInfo, [StringSyntax(StringSyntaxAttribute.Json)] string argsJson)
     {
         // This method doesn't need [JSInvokable] because the platform is responsible for having
         // some way to dispatch calls here. The logic inside here is the thing that checks whether
@@ -136,6 +138,7 @@ public static class DotNetDispatcher
         }
     }
 
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "We expect application code is configured to ensure return types of JSInvokable methods are retained.")]
     private static void EndInvokeDotNetAfterTask(Task task, JSRuntime jsRuntime, in DotNetInvocationInfo invocationInfo)
     {
         if (task.Exception != null)
@@ -208,6 +211,7 @@ public static class DotNetDispatcher
         }
     }
 
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "We expect application code is configured to ensure return types of JSInvokable methods are retained.")]
     internal static object?[] ParseArguments(JSRuntime jsRuntime, string methodIdentifier, string arguments, Type[] parameterTypes)
     {
         if (parameterTypes.Length == 0)
@@ -346,15 +350,8 @@ public static class DotNetDispatcher
 
     private static (MethodInfo, Type[]) GetCachedMethodInfo(AssemblyKey assemblyKey, string methodIdentifier)
     {
-        if (string.IsNullOrWhiteSpace(assemblyKey.AssemblyName))
-        {
-            throw new ArgumentException($"Property '{nameof(AssemblyKey.AssemblyName)}' cannot be null, empty, or whitespace.", nameof(assemblyKey));
-        }
-
-        if (string.IsNullOrWhiteSpace(methodIdentifier))
-        {
-            throw new ArgumentException("Cannot be null, empty, or whitespace.", nameof(methodIdentifier));
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(assemblyKey.AssemblyName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(methodIdentifier);
 
         var assemblyMethods = _cachedMethodsByAssembly.GetOrAdd(assemblyKey, ScanAssemblyForCallableMethods);
         if (assemblyMethods.TryGetValue(methodIdentifier, out var result))
@@ -384,7 +381,12 @@ public static class DotNetDispatcher
     private static (MethodInfo methodInfo, Type[] parameterTypes) GetCachedMethodInfo(IDotNetObjectReference objectReference, string methodIdentifier)
     {
         var type = objectReference.Value.GetType();
+
+        // Suppressed with "pragma warning disable" in addition to WarningSuppressions.xml so ILLink Roslyn Anayzer doesn't report the warning.
+#pragma warning disable IL2111 // Method with parameters or return value with `DynamicallyAccessedMembersAttribute` is accessed via reflection. Trimmer can't guarantee availability of the requirements of the method.
         var assemblyMethods = _cachedMethodsByType.GetOrAdd(type, ScanTypeForCallableMethods);
+#pragma warning restore IL2111 // Method with parameters or return value with `DynamicallyAccessedMembersAttribute` is accessed via reflection. Trimmer can't guarantee availability of the requirements of the method.
+
         if (assemblyMethods.TryGetValue(methodIdentifier, out var result))
         {
             return result;
@@ -405,18 +407,21 @@ public static class DotNetDispatcher
                     continue;
                 }
 
-                var identifier = method.GetCustomAttribute<JSInvokableAttribute>(false)!.Identifier ?? method.Name!;
-                var parameterTypes = GetParameterTypes(method);
-
-                if (result.ContainsKey(identifier))
+                foreach (var attr in method.GetCustomAttributes<JSInvokableAttribute>(false))
                 {
-                    throw new InvalidOperationException($"The type {type.Name} contains more than one " +
-                        $"[JSInvokable] method with identifier '{identifier}'. All [JSInvokable] methods within the same " +
-                        "type must have different identifiers. You can pass a custom identifier as a parameter to " +
-                        $"the [JSInvokable] attribute.");
-                }
+                    var identifier = attr.Identifier ?? method.Name;
+                    var parameterTypes = GetParameterTypes(method);
 
-                result.Add(identifier, (method, parameterTypes));
+                    if (result.ContainsKey(identifier))
+                    {
+                        throw new InvalidOperationException($"The type {type.Name} contains more than one " +
+                            $"[JSInvokable] method with identifier '{identifier}'. All [JSInvokable] methods within the same " +
+                            "type must have different identifiers. You can pass a custom identifier as a parameter to " +
+                            $"the [JSInvokable] attribute.");
+                    }
+
+                    result.Add(identifier, (method, parameterTypes));
+                }
             }
 
             return result;
@@ -425,6 +430,7 @@ public static class DotNetDispatcher
 
     [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026", Justification = "We expect application code is configured to ensure JSInvokable methods are retained. https://github.com/dotnet/aspnetcore/issues/29946")]
     [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2072", Justification = "We expect application code is configured to ensure JSInvokable methods are retained. https://github.com/dotnet/aspnetcore/issues/29946")]
+    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "We expect application code is configured to ensure JSInvokable methods are retained. https://github.com/dotnet/aspnetcore/issues/29946")]
     private static Dictionary<string, (MethodInfo, Type[])> ScanAssemblyForCallableMethods(AssemblyKey assemblyKey)
     {
         // TODO: Consider looking first for assembly-level attributes (i.e., if there are any,
@@ -440,18 +446,21 @@ public static class DotNetDispatcher
                     continue;
                 }
 
-                var identifier = method.GetCustomAttribute<JSInvokableAttribute>(false)!.Identifier ?? method.Name;
-                var parameterTypes = GetParameterTypes(method);
-
-                if (result.ContainsKey(identifier))
+                foreach (var attr in method.GetCustomAttributes<JSInvokableAttribute>(false))
                 {
-                    throw new InvalidOperationException($"The assembly '{assemblyKey.AssemblyName}' contains more than one " +
-                        $"[JSInvokable] method with identifier '{identifier}'. All [JSInvokable] methods within the same " +
-                        $"assembly must have different identifiers. You can pass a custom identifier as a parameter to " +
-                        $"the [JSInvokable] attribute.");
-                }
+                    var identifier = attr.Identifier ?? method.Name;
+                    var parameterTypes = GetParameterTypes(method);
 
-                result.Add(identifier, (method, parameterTypes));
+                    if (result.ContainsKey(identifier))
+                    {
+                        throw new InvalidOperationException($"The assembly '{assemblyKey.AssemblyName}' contains more than one " +
+                            $"[JSInvokable] method with identifier '{identifier}'. All [JSInvokable] methods within the same " +
+                            $"assembly must have different identifiers. You can pass a custom identifier as a parameter to " +
+                            $"the [JSInvokable] attribute.");
+                    }
+
+                    result.Add(identifier, (method, parameterTypes));
+                }
             }
         }
 

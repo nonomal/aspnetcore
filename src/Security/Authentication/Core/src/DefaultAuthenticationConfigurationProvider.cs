@@ -8,14 +8,14 @@ namespace Microsoft.AspNetCore.Authentication;
 internal sealed class DefaultAuthenticationConfigurationProvider : IAuthenticationConfigurationProvider
 {
     private readonly IConfiguration _configuration;
+    private const string AuthenticationKey = "Authentication";
+
+    // Note: this generally will never be called except in unit tests as IConfiguration is generally available from the host
+    public DefaultAuthenticationConfigurationProvider() : this(new ConfigurationManager())
+    { }
 
     public DefaultAuthenticationConfigurationProvider(IConfiguration configuration)
-    {
-        _configuration = configuration;
-    }
+        => _configuration = configuration;
 
-    public IConfiguration GetAuthenticationSchemeConfiguration(string authenticationScheme)
-    {
-        return _configuration.GetSection($"Authentication:Schemes:{authenticationScheme}");
-    }
+    public IConfiguration AuthenticationConfiguration => _configuration.GetSection(AuthenticationKey);
 }

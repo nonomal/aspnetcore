@@ -4,14 +4,15 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Tests;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Microsoft.AspNetCore.Authentication;
 
 public abstract class SharedAuthenticationTests<TOptions> where TOptions : AuthenticationSchemeOptions
 {
-    protected TestClock Clock { get; } = new TestClock();
+    protected FakeTimeProvider TimeProvider { get; } = new();
 
     protected abstract string DefaultScheme { get; }
     protected virtual string DisplayName { get; }
@@ -25,8 +26,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task CanForwardDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
 
         var builder = services.AddAuthentication(o =>
         {
@@ -83,7 +83,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     {
         if (SupportsSignIn)
         {
-            var services = new ServiceCollection().AddLogging();
+            var services = new ServiceCollection().ConfigureAuthTestServices();
 
             var builder = services.AddAuthentication(o =>
             {
@@ -126,7 +126,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     {
         if (SupportsSignOut)
         {
-            var services = new ServiceCollection().AddLogging();
+            var services = new ServiceCollection().ConfigureAuthTestServices();
             var builder = services.AddAuthentication(o =>
             {
                 o.DefaultScheme = DefaultScheme;
@@ -166,8 +166,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task ForwardForbidWinsOverDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = DefaultScheme;
@@ -216,8 +215,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task ForwardAuthenticateOnlyRunsTransformOnceByDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var transform = new RunOnce();
         var builder = services.AddSingleton<IClaimsTransformation>(transform).AddAuthentication(o =>
         {
@@ -247,8 +245,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task ForwardAuthenticateWinsOverDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = DefaultScheme;
@@ -287,8 +284,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task ForwardChallengeWinsOverDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = DefaultScheme;
@@ -327,8 +323,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task ForwardSelectorWinsOverDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = DefaultScheme;
@@ -397,8 +392,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task NullForwardSelectorUsesDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = DefaultScheme;
@@ -467,8 +461,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task SpecificForwardWinsOverSelectorAndDefault()
     {
-        var services = new ServiceCollection().AddLogging();
-        services.AddSingleton<IConfiguration>(new ConfigurationManager());
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication(o =>
         {
             o.DefaultScheme = DefaultScheme;
@@ -542,7 +535,7 @@ public abstract class SharedAuthenticationTests<TOptions> where TOptions : Authe
     [Fact]
     public async Task VerifySchemeDefaults()
     {
-        var services = new ServiceCollection();
+        var services = new ServiceCollection().ConfigureAuthTestServices();
         var builder = services.AddAuthentication();
         RegisterAuth(builder, o => { });
         var sp = services.BuildServiceProvider();

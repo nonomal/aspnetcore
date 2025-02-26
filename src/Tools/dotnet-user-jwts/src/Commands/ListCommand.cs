@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using Microsoft.Extensions.CommandLineUtils;
 using Microsoft.Extensions.Tools.Internal;
 
@@ -12,23 +13,23 @@ internal sealed class ListCommand
     {
         app.Command("list", cmd =>
         {
-            cmd.Description = "Lists the JWTs issued for the project";
+            cmd.Description = Resources.ListCommand_Description;
 
             var showTokensOption = cmd.Option(
                 "--show-tokens",
-                "Indicates whether JWT base64 strings should be shown",
+                Resources.ListCommand_ShowTokenOption_Description,
                 CommandOptionType.NoValue);
 
             cmd.HelpOption("-h|--help");
 
             cmd.OnExecute(() =>
             {
-                return Execute(cmd.Reporter, cmd.ProjectOption.Value(), showTokensOption.HasValue());
+                return Execute(cmd.Reporter, cmd.ProjectOption.Value(), showTokensOption.HasValue(), cmd.OutputOption.Value());
             });
         });
     }
 
-    private static int Execute(IReporter reporter, string projectPath, bool showTokens)
+    private static int Execute(IReporter reporter, string projectPath, bool showTokens, string outputFormat)
     {
         if (!DevJwtCliHelpers.GetProjectAndSecretsId(projectPath, reporter, out var project, out var userSecretsId))
         {
@@ -36,17 +37,44 @@ internal sealed class ListCommand
         }
         var jwtStore = new JwtStore(userSecretsId);
 
-        reporter.Output($"Project: {project}");
-        reporter.Output($"User Secrets ID: {userSecretsId}");
+        switch (outputFormat)
+        {
+            case "json":
+                PrintJwtsJson(reporter, jwtStore);
+                break;
+            default:
+                PrintJwtsDefault(reporter, project, userSecretsId, jwtStore, showTokens);
+                break;
+        }
+
+        return 0;
+    }
+
+    private static void PrintJwtsJson(IReporter reporter, JwtStore jwtStore)
+    {
+        if (jwtStore.Jwts is { Count: > 0 } jwts)
+        {
+            reporter.Output(JsonSerializer.Serialize(jwts, JwtSerializerOptions.Default));
+        }
+        else
+        {
+            reporter.Output(JsonSerializer.Serialize(Array.Empty<Jwt>(), JwtSerializerOptions.Default));
+        }
+    }
+
+    private static void PrintJwtsDefault(IReporter reporter, string project, string userSecretsId, JwtStore jwtStore, bool showTokens)
+    {
+        reporter.Output(Resources.FormatListCommand_Project(project));
+        reporter.Output(Resources.FormatListCommand_UserSecretsId(userSecretsId));
 
         if (jwtStore.Jwts is { Count: > 0 } jwts)
         {
             var table = new ConsoleTable(reporter);
-            table.AddColumns("Id", "Scheme Name", "Audience", "Issued", "Expires");
+            table.AddColumns(Resources.JwtPrint_Id, Resources.JwtPrint_Scheme, Resources.JwtPrint_Audiences, Resources.JwtPrint_IssuedOn, Resources.JwtPrint_ExpiresOn);
 
             if (showTokens)
             {
-                table.AddColumns("Encoded Token");
+                table.AddColumns(Resources.JwtPrint_Token);
             }
 
             foreach (var jwtRow in jwts)
@@ -66,9 +94,8 @@ internal sealed class ListCommand
         }
         else
         {
-            reporter.Output("No JWTs created yet!");
+            reporter.Output(Resources.ListCommand_NoJwts);
         }
 
-        return 0;
     }
 }

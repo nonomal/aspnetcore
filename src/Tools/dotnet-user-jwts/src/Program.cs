@@ -17,6 +17,9 @@ public class Program
         _reporter = new ConsoleReporter(console);
     }
 
+    // For testing.
+    internal string UserJwtsFilePath { get; set; }
+
     public static void Main(string[] args)
     {
         new Program(PhysicalConsole.Singleton).Run(args);
@@ -34,11 +37,11 @@ public class Program
         // dotnet user-jwts list
         ListCommand.Register(userJwts);
         // dotnet user-jwts create
-        CreateCommand.Register(userJwts);
+        CreateCommand.Register(userJwts, this);
         // dotnet user-jwts print ecd045
         PrintCommand.Register(userJwts);
-        // dotnet user-jwts delete ecd045
-        DeleteCommand.Register(userJwts);
+        // dotnet user-jwts remove ecd045
+        RemoveCommand.Register(userJwts);
         // dotnet user-jwts clear
         ClearCommand.Register(userJwts);
         // dotnet user-jwts key
@@ -47,6 +50,18 @@ public class Program
         // Show help information if no subcommand/option was specified.
         userJwts.OnExecute(() => userJwts.ShowHelp());
 
-        userJwts.Execute(args);
+        try
+        {
+            userJwts.Execute(args);
+        }
+        catch (CommandParsingException parsingException)
+        {
+            _reporter.Error(parsingException.Message);
+            userJwts.ShowHelp();
+        }
+        catch (Exception ex)
+        {
+            _reporter.Error(ex.Message);
+        }
     }
 }

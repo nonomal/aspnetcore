@@ -8,7 +8,7 @@ using Microsoft.JSInterop;
 
 namespace Microsoft.AspNetCore.Components.WebView;
 
-// Handles comunication between the component abstractions (Renderer, NavigationManager, JSInterop, etc.)
+// Handles communication between the component abstractions (Renderer, NavigationManager, JSInterop, etc.)
 // and the underlying transport channel
 internal sealed class IpcSender
 {
@@ -39,6 +39,11 @@ internal sealed class IpcSender
         DispatchMessageWithErrorHandling(IpcCommon.Serialize(IpcCommon.OutgoingMessageType.Navigate, uri, options));
     }
 
+    public void Refresh(bool forceReload)
+    {
+        DispatchMessageWithErrorHandling(IpcCommon.Serialize(IpcCommon.OutgoingMessageType.Refresh, forceReload));
+    }
+
     public void AttachToDocument(int componentId, string selector)
     {
         DispatchMessageWithErrorHandling(IpcCommon.Serialize(IpcCommon.OutgoingMessageType.AttachToDocument, componentId, selector));
@@ -57,6 +62,16 @@ internal sealed class IpcSender
     public void SendByteArray(int id, byte[] data)
     {
         DispatchMessageWithErrorHandling(IpcCommon.Serialize(IpcCommon.OutgoingMessageType.SendByteArrayToJS, id, data));
+    }
+
+    public void SetHasLocationChangingListeners(bool hasListeners)
+    {
+        DispatchMessageWithErrorHandling(IpcCommon.Serialize(IpcCommon.OutgoingMessageType.SetHasLocationChangingListeners, hasListeners));
+    }
+
+    public void EndLocationChanging(int callId, bool shouldContinueNavigation)
+    {
+        DispatchMessageWithErrorHandling(IpcCommon.Serialize(IpcCommon.OutgoingMessageType.EndLocationChanging, callId, shouldContinueNavigation));
     }
 
     public void NotifyUnhandledException(Exception exception)

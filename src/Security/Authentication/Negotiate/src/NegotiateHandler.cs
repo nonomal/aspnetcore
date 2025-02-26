@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Security.Claims;
 using System.Security.Principal;
@@ -19,7 +18,6 @@ namespace Microsoft.AspNetCore.Authentication.Negotiate;
 /// <summary>
 /// Authenticates requests using Negotiate, Kerberos, or NTLM.
 /// </summary>
-[RequiresUnreferencedCode("Negotiate authentication uses types that cannot be statically analyzed.")]
 public class NegotiateHandler : AuthenticationHandler<NegotiateOptions>, IAuthenticationRequestHandler
 {
     private const string AuthPersistenceKey = nameof(AuthPersistence);
@@ -33,8 +31,17 @@ public class NegotiateHandler : AuthenticationHandler<NegotiateOptions>, IAuthen
     /// Creates a new <see cref="NegotiateHandler"/>
     /// </summary>
     /// <inheritdoc />
+    [Obsolete("ISystemClock is obsolete, use TimeProvider on AuthenticationSchemeOptions instead.")]
     public NegotiateHandler(IOptionsMonitor<NegotiateOptions> options, ILoggerFactory logger, UrlEncoder encoder, ISystemClock clock)
         : base(options, logger, encoder, clock)
+    { }
+
+    /// <summary>
+    /// Creates a new <see cref="NegotiateHandler"/>
+    /// </summary>
+    /// <inheritdoc />
+    public NegotiateHandler(IOptionsMonitor<NegotiateOptions> options, ILoggerFactory logger, UrlEncoder encoder)
+        : base(options, logger, encoder)
     { }
 
     /// <summary>
@@ -274,7 +281,7 @@ public class NegotiateHandler : AuthenticationHandler<NegotiateOptions>, IAuthen
             }
             else if (errorContext.Result.Failure != null)
             {
-                throw new Exception("An error was returned from the AuthenticationFailed event.", errorContext.Result.Failure);
+                throw new AuthenticationFailureException("An error was returned from the AuthenticationFailed event.", errorContext.Result.Failure);
             }
         }
 

@@ -2,9 +2,13 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
+using System.Xml.Linq;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.ActionConstraints;
@@ -19,6 +23,7 @@ using Microsoft.AspNetCore.Mvc.Routing;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Routing.Constraints;
 using Microsoft.AspNetCore.Routing.Template;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using Moq;
@@ -27,6 +32,36 @@ namespace Microsoft.AspNetCore.Mvc.Description;
 
 public class DefaultApiDescriptionProviderTest
 {
+    [Fact]
+    public void OnlyCatchAllParameter_IsReportedAsOptional()
+    {
+        // Arrange: Create an action descriptor with a multi-parameter route template.
+        var action = CreateActionDescriptor();
+        action.AttributeRouteInfo = new AttributeRouteInfo
+        {
+            Template = "/products/{category}/items/{group}/inventory/{**any}"
+        };
+
+        // Act: Get the API descriptions using the existing helper.
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert: Only the 'any' parameter should be optional.
+        var description = Assert.Single(descriptions);
+        var categoryParameter = Assert.Single(description.ParameterDescriptions,
+            p => string.Equals(p.Name, "category", StringComparison.OrdinalIgnoreCase));
+        var groupParameter = Assert.Single(description.ParameterDescriptions,
+            p => string.Equals(p.Name, "group", StringComparison.OrdinalIgnoreCase));
+        var anyParameter = Assert.Single(description.ParameterDescriptions,
+            p => string.Equals(p.Name, "any", StringComparison.OrdinalIgnoreCase));
+
+        // The non-catch-all parameters should be required.
+        Assert.True(categoryParameter.IsRequired);
+        Assert.True(groupParameter.IsRequired);
+
+        // The catch-all parameter should be optional.
+        Assert.False(anyParameter.IsRequired);
+    }
+
     [Fact]
     public void GetApiDescription_IgnoresNonControllerActionDescriptor()
     {
@@ -521,7 +556,7 @@ public class DefaultApiDescriptionProviderTest
     {
         // Arrange
         var action = CreateActionDescriptor(methodName);
-        action.EndpointMetadata = new List<object>() { new ProducesResponseTypeMetadata(typeof(Product), 200) };
+        action.EndpointMetadata = new List<object>() { new ProducesResponseTypeMetadata(200, typeof(Product)) };
 
         // Act
         var descriptions = GetApiDescriptions(action);
@@ -540,7 +575,7 @@ public class DefaultApiDescriptionProviderTest
     {
         // Arrange
         var action = CreateActionDescriptor(methodName);
-        action.EndpointMetadata = new List<object>() { new ProducesResponseTypeMetadata(typeof(Product), 200) };
+        action.EndpointMetadata = new List<object>() { new ProducesResponseTypeMetadata(200, typeof(Product)) };
         action.FilterDescriptors = new List<FilterDescriptor>{
             new FilterDescriptor(new ProducesResponseTypeAttribute(typeof(Customer), 200), FilterScope.Action)
         };
@@ -628,7 +663,7 @@ public class DefaultApiDescriptionProviderTest
         Assert.Empty(description.SupportedResponseTypes);
     }
 
-    public static TheoryData ReturnsActionResultWithProducesAndProducesContentTypeData
+    public static TheoryData<Type, string, List<FilterDescriptor>> ReturnsActionResultWithProducesAndProducesContentTypeData
     {
         get
         {
@@ -1102,7 +1137,8 @@ public class DefaultApiDescriptionProviderTest
         var action = CreateActionDescriptor(methodName);
         var filter = new ContentTypeAttribute("text/*")
         {
-            Type = typeof(Order)
+            Type = typeof(Order),
+            Description = "Example"
         };
 
         action.FilterDescriptors = new List<FilterDescriptor>
@@ -1119,6 +1155,7 @@ public class DefaultApiDescriptionProviderTest
         Assert.NotNull(responseTypes.ModelMetadata);
         Assert.Equal(200, responseTypes.StatusCode);
         Assert.Equal(typeof(Order), responseTypes.Type);
+        Assert.Equal("Example", responseTypes.Description);
 
         foreach (var responseFormat in responseTypes.ApiResponseFormats)
         {
@@ -1572,9 +1609,123 @@ public class DefaultApiDescriptionProviderTest
 
         // Assert
         var description = Assert.Single(descriptions);
-        Assert.Equal(1, description.ParameterDescriptions.Count);
+        Assert.Single(description.ParameterDescriptions);
 
         var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "Name");
+        Assert.Same(BindingSource.Query, id.Source);
+        Assert.Equal(typeof(string), id.Type);
+    }
+
+    [Fact]
+    public void GetApiDescription_ParameterDescription_ParsablePrimitiveType()
+    {
+        // Arrange
+        var action = CreateActionDescriptor(nameof(AcceptsTryParsablePrimitiveType));
+        var parameterDescriptor = action.Parameters.Single();
+
+        // Act
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert
+        var description = Assert.Single(descriptions);
+        Assert.Single(description.ParameterDescriptions);
+
+        var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "id");
+        Assert.Same(BindingSource.Query, id.Source);
+        Assert.Equal(typeof(Guid), id.Type);
+    }
+
+    [Fact]
+    public void GetApiDescription_ParameterDescription_NullableParsablePrimitiveType()
+    {
+        // Arrange
+        var action = CreateActionDescriptor(nameof(AcceptsTryParsableNullablePrimitiveType));
+        var parameterDescriptor = action.Parameters.Single();
+
+        // Act
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert
+        var description = Assert.Single(descriptions);
+        Assert.Single(description.ParameterDescriptions);
+
+        var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "id");
+        Assert.Same(BindingSource.Query, id.Source);
+        Assert.Equal(typeof(Guid?), id.Type);
+    }
+
+    [Fact]
+    public void GetApiDescription_ParameterDescription_ParsableType()
+    {
+        // Arrange
+        var action = CreateActionDescriptor(nameof(AcceptsTryParsableEmployee));
+        var parameterDescriptor = action.Parameters.Single();
+
+        // Act
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert
+        var description = Assert.Single(descriptions);
+        Assert.Single(description.ParameterDescriptions);
+
+        var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "employee");
+        Assert.Same(BindingSource.Query, id.Source);
+        Assert.Equal(typeof(string), id.Type);
+    }
+
+    [Fact]
+    public void GetApiDescription_ParameterDescription_NullableParsableType()
+    {
+        // Arrange
+        var action = CreateActionDescriptor(nameof(AcceptsNullableTryParsableEmployee));
+        var parameterDescriptor = action.Parameters.Single();
+
+        // Act
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert
+        var description = Assert.Single(descriptions);
+        Assert.Single(description.ParameterDescriptions);
+
+        var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "employee");
+        Assert.Same(BindingSource.Query, id.Source);
+        Assert.Equal(typeof(string), id.Type);
+    }
+
+    [Fact]
+    public void GetApiDescription_ParameterDescription_ConvertibleType()
+    {
+        // Arrange
+        var action = CreateActionDescriptor(nameof(AcceptsConvertibleEmployee));
+        var parameterDescriptor = action.Parameters.Single();
+
+        // Act
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert
+        var description = Assert.Single(descriptions);
+        Assert.Single(description.ParameterDescriptions);
+
+        var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "employee");
+        Assert.Same(BindingSource.Query, id.Source);
+        Assert.Equal(typeof(string), id.Type);
+    }
+
+    [Fact]
+    public void GetApiDescription_ParameterDescription_NullableConvertibleType()
+    {
+        // Arrange
+        var action = CreateActionDescriptor(nameof(AcceptsNullableConvertibleEmployee));
+        var parameterDescriptor = action.Parameters.Single();
+
+        // Act
+        var descriptions = GetApiDescriptions(action);
+
+        // Assert
+        var description = Assert.Single(descriptions);
+        Assert.Single(description.ParameterDescriptions);
+
+        var id = Assert.Single(description.ParameterDescriptions, p => p.Name == "employee");
         Assert.Same(BindingSource.Query, id.Source);
         Assert.Equal(typeof(string), id.Type);
     }
@@ -2338,7 +2489,7 @@ public class DefaultApiDescriptionProviderTest
     }
 
     // This will show up as source = unknown
-    private void AcceptsProduct_Custom([ModelBinder(BinderType = typeof(BodyModelBinder))] Product product)
+    private void AcceptsProduct_Custom([ModelBinder<BodyModelBinder>] Product product)
     {
     }
 
@@ -2354,7 +2505,7 @@ public class DefaultApiDescriptionProviderTest
     {
     }
 
-    private void AcceptsFormatters_Services([FromServices] ITestService tempDataProvider)
+    private void AcceptsFormatters_Services([FromServices] ITestService tempDataProvider, [FromKeyedServices("foo")] ITestService keyedTempDataProvider)
     {
     }
 
@@ -2373,6 +2524,34 @@ public class DefaultApiDescriptionProviderTest
     private void AcceptsEmployee([FromQuery(Name = "employee")] Employee dto)
     {
     }
+
+    private void AcceptsTryParsablePrimitiveType([FromQuery] Guid id)
+    {
+    }
+
+    private void AcceptsTryParsableEmployee([FromQuery] TryParsableEmployee employee)
+    {
+    }
+
+    private void AcceptsConvertibleEmployee([FromQuery] ConvertibleEmployee employee)
+    {
+    }
+
+#nullable enable
+
+    private void AcceptsNullableTryParsableEmployee([FromQuery] TryParsableEmployee? employee)
+    {
+    }
+
+    private void AcceptsTryParsableNullablePrimitiveType([FromQuery] Guid? id)
+    {
+    }
+
+    private void AcceptsNullableConvertibleEmployee([FromQuery] ConvertibleEmployee? employee)
+    {
+    }
+
+#nullable restore
 
     private void AcceptsOrderDTO(OrderDTO dto)
     {
@@ -2410,7 +2589,7 @@ public class DefaultApiDescriptionProviderTest
     {
     }
 
-    private void FromCustom([ModelBinder(typeof(BodyModelBinder))] int id)
+    private void FromCustom([ModelBinder<BodyModelBinder>] int id)
     {
     }
 
@@ -2497,6 +2676,33 @@ public class DefaultApiDescriptionProviderTest
     private class Employee
     {
         public string Name { get; set; }
+    }
+
+    [TypeConverter(typeof(EmployeeConverter))]
+    private class ConvertibleEmployee
+    {
+        public string Name { get; set; }
+    }
+
+    private struct TryParsableEmployee : IParsable<TryParsableEmployee>
+    {
+        public string Name { get; set; }
+
+        public static TryParsableEmployee Parse(string s, IFormatProvider provider)
+        {
+            if (TryParse(s, provider, out var result))
+            {
+                return result;
+            }
+
+            throw new FormatException($"{nameof(s)} is not in the correct format");
+        }
+
+        public static bool TryParse([NotNullWhen(true)] string s, IFormatProvider provider, [MaybeNullWhen(false)] out TryParsableEmployee result)
+        {
+            result = new() { Name = s };
+            return true;
+        }
     }
 
     private class Manager
@@ -2700,6 +2906,8 @@ public class DefaultApiDescriptionProviderTest
 
         public Type Type { get; set; }
 
+        public string Description { get; set; }
+
         public void SetContentTypes(MediaTypeCollection contentTypes)
         {
             contentTypes.Clear();
@@ -2726,5 +2934,23 @@ public class DefaultApiDescriptionProviderTest
         public Type RequestType => null;
 
         public bool IsOptional => false;
+    }
+
+    private class EmployeeConverter : TypeConverter
+    {
+        public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType)
+        {
+            return sourceType == typeof(string) || base.CanConvertFrom(context, sourceType);
+        }
+
+        public override object ConvertFrom(ITypeDescriptorContext context, CultureInfo culture, object value)
+        {
+            if (value is string input)
+            {
+                return new ConvertibleEmployee() { Name = input };
+            }
+
+            return base.ConvertFrom(context, culture, value);
+        }
     }
 }

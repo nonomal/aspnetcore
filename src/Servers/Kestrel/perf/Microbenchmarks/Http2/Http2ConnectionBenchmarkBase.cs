@@ -11,10 +11,12 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2;
-using Microsoft.AspNetCore.Testing;
+using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Infrastructure;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Net.Http.Headers;
 using Http2HeadersEnumerator = Microsoft.AspNetCore.Server.Kestrel.Core.Tests.Http2HeadersEnumerator;
+using Microsoft.AspNetCore.Connections.Features;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.Microbenchmarks;
 
@@ -48,10 +50,10 @@ public abstract class Http2ConnectionBenchmarkBase
         _connectionPair = DuplexPipe.CreateConnectionPair(options, options);
 
         _httpRequestHeaders = new HttpRequestHeaders();
-        _httpRequestHeaders[HeaderNames.Method] = new StringValues("GET");
-        _httpRequestHeaders[HeaderNames.Path] = new StringValues("/");
-        _httpRequestHeaders[HeaderNames.Scheme] = new StringValues("http");
-        _httpRequestHeaders[HeaderNames.Authority] = new StringValues("localhost:80");
+        _httpRequestHeaders[InternalHeaderNames.Method] = new StringValues("GET");
+        _httpRequestHeaders[InternalHeaderNames.Path] = new StringValues("/");
+        _httpRequestHeaders[InternalHeaderNames.Scheme] = new StringValues("http");
+        _httpRequestHeaders[InternalHeaderNames.Authority] = new StringValues("localhost:80");
 
         if (NumCookies > 0)
         {
@@ -68,17 +70,21 @@ public abstract class Http2ConnectionBenchmarkBase
 
         var serviceContext = TestContextFactory.CreateServiceContext(
             serverOptions: new KestrelServerOptions(),
-            dateHeaderValueManager: new DateHeaderValueManager(),
-            systemClock: new MockSystemClock());
-        serviceContext.DateHeaderValueManager.OnHeartbeat(default);
+            dateHeaderValueManager: new DateHeaderValueManager(TimeProvider.System),
+            timeProvider: TimeProvider.System);
+        serviceContext.DateHeaderValueManager.OnHeartbeat();
 
+        var featureCollection = new FeatureCollection();
+        featureCollection.Set<IConnectionMetricsContextFeature>(new TestConnectionMetricsContextFeature());
+        featureCollection.Set<IConnectionMetricsTagsFeature>(new TestConnectionMetricsTagsFeature());
+        featureCollection.Set<IProtocolErrorCodeFeature>(new TestProtocolErrorCodeFeature());
         var connectionContext = TestContextFactory.CreateHttpConnectionContext(
             serviceContext: serviceContext,
             connectionContext: null,
             transport: _connectionPair.Transport,
             timeoutControl: new MockTimeoutControl(),
             memoryPool: _memoryPool,
-            connectionFeatures: new FeatureCollection());
+            connectionFeatures: featureCollection);
 
         _connection = new Http2Connection(connectionContext);
 
@@ -182,5 +188,20 @@ public abstract class Http2ConnectionBenchmarkBase
         _connectionPair.Application.Output.Complete();
         await _requestProcessingTask;
         _memoryPool?.Dispose();
+    }
+
+    private sealed class TestConnectionMetricsContextFeature : IConnectionMetricsContextFeature
+    {
+        public ConnectionMetricsContext MetricsContext { get; }
+    }
+
+    private sealed class TestConnectionMetricsTagsFeature : IConnectionMetricsTagsFeature
+    {
+        public ICollection<KeyValuePair<string, object>> Tags { get; }
+    }
+
+    private sealed class TestProtocolErrorCodeFeature : IProtocolErrorCodeFeature
+    {
+        public long Error { get; set; } = -1;
     }
 }

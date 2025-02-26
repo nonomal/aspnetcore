@@ -160,7 +160,7 @@ registerBuiltInEventType(['wheel', 'mousewheel'], {
   createEventArgs: e => parseWheelEvent(e as WheelEvent),
 });
 
-registerBuiltInEventType(['toggle'], createBlankEventArgsOptions);
+registerBuiltInEventType(['cancel', 'close', 'toggle'], createBlankEventArgsOptions);
 
 function parseChangeEvent(event: Event): ChangeEventArgs {
   const element = event.target as Element;
@@ -260,6 +260,7 @@ function parseKeyboardEvent(event: KeyboardEvent): KeyboardEventArgs {
     altKey: event.altKey,
     metaKey: event.metaKey,
     type: event.type,
+    isComposing: event.isComposing,
   };
 }
 
@@ -305,6 +306,8 @@ function parseMouseEvent(event: MouseEvent): MouseEventArgs {
     offsetY: event.offsetY,
     pageX: event.pageX,
     pageY: event.pageY,
+    movementX: event.movementX,
+    movementY: event.movementY,
     button: event.button,
     buttons: event.buttons,
     ctrlKey: event.ctrlKey,
@@ -409,6 +412,7 @@ interface KeyboardEventArgs {
   altKey: boolean;
   metaKey: boolean;
   type: string;
+  isComposing: boolean;
 }
 
 interface MouseEventArgs {
@@ -421,6 +425,8 @@ interface MouseEventArgs {
   offsetY: number;
   pageX: number;
   pageY: number;
+  movementX: number;
+  movementY: number;
   button: number;
   buttons: number;
   ctrlKey: boolean;

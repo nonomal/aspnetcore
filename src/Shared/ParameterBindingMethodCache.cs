@@ -12,21 +12,32 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Internal;
+using static Microsoft.AspNetCore.Http.ParameterBindingMethodCache.SharedExpressions;
 
 #nullable enable
 
 namespace Microsoft.AspNetCore.Http;
 
-[UnconditionalSuppressMessage("Trimmer", "IL2060", Justification = "Trimmer warnings are presented in RequestDelegateFactory.")]
-[UnconditionalSuppressMessage("Trimmer", "IL2065", Justification = "Trimmer warnings are presented in RequestDelegateFactory.")]
-[UnconditionalSuppressMessage("Trimmer", "IL2070", Justification = "Trimmer warnings are presented in RequestDelegateFactory.")]
+[RequiresUnreferencedCode("Uses unbounded Reflection to inspect property types.")]
 internal sealed class ParameterBindingMethodCache
 {
     private static readonly MethodInfo ConvertValueTaskMethod = typeof(ParameterBindingMethodCache).GetMethod(nameof(ConvertValueTask), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo ConvertValueTaskOfNullableResultMethod = typeof(ParameterBindingMethodCache).GetMethod(nameof(ConvertValueTaskOfNullableResult), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo BindAsyncMethod = typeof(ParameterBindingMethodCache).GetMethod(nameof(BindAsync), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo UriTryCreateMethod = typeof(Uri).GetMethod(nameof(Uri.TryCreate), BindingFlags.Public | BindingFlags.Static, new[] { typeof(string), typeof(UriKind), typeof(Uri).MakeByRefType() })!;
 
-    internal static readonly ParameterExpression TempSourceStringExpr = Expression.Variable(typeof(string), "tempSourceString");
-    internal static readonly ParameterExpression HttpContextExpr = Expression.Parameter(typeof(HttpContext), "httpContext");
+    // Thread-safe singletons for ParameterBindingMethodCache
+    private static readonly Lazy<ParameterBindingMethodCache> _instance = new(() => new ParameterBindingMethodCache());
+    public static ParameterBindingMethodCache Instance = _instance.Value;
+    private static readonly Lazy<ParameterBindingMethodCache> _nonThrowingInstance = new(() => new ParameterBindingMethodCache(throwOnInvalidMethod: false));
+    public static ParameterBindingMethodCache NonThrowingInstance = _nonThrowingInstance.Value;
+
+    // work around https://github.com/dotnet/runtime/issues/81864 by splitting these into a separate class.
+    internal static class SharedExpressions
+    {
+        internal static readonly ParameterExpression TempSourceStringExpr = Expression.Variable(typeof(string), "tempSourceString");
+        internal static readonly ParameterExpression HttpContextExpr = Expression.Parameter(typeof(HttpContext), "httpContext");
+    }
 
     private readonly MethodInfo _enumTryParseMethod;
     private readonly bool _throwOnInvalidMethod;
@@ -51,20 +62,34 @@ internal sealed class ParameterBindingMethodCache
         _throwOnInvalidMethod = throwOnInvalidMethod;
     }
 
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
+    [RequiresDynamicCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
     public bool HasTryParseMethod(Type type)
     {
         var nonNullableParameterType = Nullable.GetUnderlyingType(type) ?? type;
         return FindTryParseMethod(nonNullableParameterType) is not null;
     }
 
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
+    [RequiresDynamicCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
     public bool HasBindAsyncMethod(ParameterInfo parameter) =>
         FindBindAsyncMethod(parameter).Expression is not null;
 
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
+    [RequiresDynamicCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
     public Func<ParameterExpression, Expression, Expression>? FindTryParseMethod(Type type)
     {
+        // This method is used to find TryParse methods from .NET types using reflection. It's used at app runtime.
+        // Routing analyzers also detect TryParse methods when calculating what types are valid in routes.
+        // Changes here to support new types should be reflected in analyzers.
         Func<ParameterExpression, Expression, Expression>? Finder(Type type)
         {
             MethodInfo? methodInfo;
+
+            if (TryGetExplicitIParsableTryParseMethod(type, out var explicitIParsableTryParseMethod))
+            {
+                return (expression, formatProvider) => Expression.Call(explicitIParsableTryParseMethod, TempSourceStringExpr, formatProvider, expression);
+            }
 
             if (type.IsEnum)
             {
@@ -92,6 +117,16 @@ internal sealed class ParameterBindingMethodCache
                         Expression.Condition(success, Expression.Convert(enumAsObject, type), Expression.Default(type))),
                     success);
                 };
+            }
+
+            if (type == typeof(Uri))
+            {
+                // UriKind.RelativeOrAbsolute is also used by UriTypeConverter which is used in MVC.
+                return (expression, formatProvider) => Expression.Call(
+                    UriTryCreateMethod,
+                    TempSourceStringExpr,
+                    Expression.Constant(UriKind.RelativeOrAbsolute),
+                    expression);
             }
 
             if (TryGetDateTimeTryParseMethod(type, out methodInfo))
@@ -176,17 +211,25 @@ internal sealed class ParameterBindingMethodCache
         return _stringMethodCallCache.GetOrAdd(type, Finder);
     }
 
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
+    [RequiresDynamicCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
     public (Expression? Expression, int ParamCount) FindBindAsyncMethod(ParameterInfo parameter)
     {
         (Func<ParameterInfo, Expression>?, int) Finder(Type nonNullableParameterType)
         {
             var hasParameterInfo = true;
-            // There should only be one BindAsync method with these parameters since C# does not allow overloading on return type.
-            var methodInfo = GetStaticMethodFromHierarchy(nonNullableParameterType, "BindAsync", new[] { typeof(HttpContext), typeof(ParameterInfo) }, ValidateReturnType);
+            var methodInfo = GetIBindableFromHttpContextMethod(nonNullableParameterType);
+
             if (methodInfo is null)
             {
-                hasParameterInfo = false;
-                methodInfo = GetStaticMethodFromHierarchy(nonNullableParameterType, "BindAsync", new[] { typeof(HttpContext) }, ValidateReturnType);
+                // There should only be one BindAsync method with these parameters since C# does not allow overloading on return type.
+                methodInfo = GetStaticMethodFromHierarchy(nonNullableParameterType, "BindAsync", new[] { typeof(HttpContext), typeof(ParameterInfo) }, ValidateReturnType);
+
+                if (methodInfo is null)
+                {
+                    hasParameterInfo = false;
+                    methodInfo = GetStaticMethodFromHierarchy(nonNullableParameterType, "BindAsync", new[] { typeof(HttpContext) }, ValidateReturnType);
+                }
             }
 
             // We're looking for a method with the following signatures:
@@ -212,11 +255,8 @@ internal sealed class ParameterBindingMethodCache
                         {
                             typedCall = Expression.Call(methodInfo, HttpContextExpr);
                         }
-                        return Expression.Call(GetGenericConvertValueTask(nonNullableParameterType), typedCall);
+                        return Expression.Call(ConvertValueTaskMethod.MakeGenericMethod(nonNullableParameterType), typedCall);
                     }, hasParameterInfo ? 2 : 1);
-
-                    [UnconditionalSuppressMessage("Trimmer", "IL2060", Justification = "Linker workaround. The type is annotated with RequiresUnreferencedCode")]
-                    static MethodInfo GetGenericConvertValueTask(Type nonNullableParameterType) => ConvertValueTaskMethod.MakeGenericMethod(nonNullableParameterType);
                 }
                 // ValueTask<Nullable<{type}>>?
                 else if (valueTaskResultType.IsGenericType &&
@@ -236,11 +276,8 @@ internal sealed class ParameterBindingMethodCache
                         {
                             typedCall = Expression.Call(methodInfo, HttpContextExpr);
                         }
-                        return Expression.Call(GetGenericConvertValueTaskOfNullableResult(nonNullableParameterType), typedCall);
+                        return Expression.Call(ConvertValueTaskOfNullableResultMethod.MakeGenericMethod(nonNullableParameterType), typedCall);
                     }, hasParameterInfo ? 2 : 1);
-
-                    [UnconditionalSuppressMessage("Trimmer", "IL2060", Justification = "Linker workaround. The type is annotated with RequiresUnreferencedCode")]
-                    static MethodInfo GetGenericConvertValueTaskOfNullableResult(Type nonNullableParameterType) => ConvertValueTaskOfNullableResultMethod.MakeGenericMethod(nonNullableParameterType);
                 }
             }
 
@@ -369,6 +406,39 @@ internal sealed class ParameterBindingMethodCache
         throw new InvalidOperationException($"No public parameterless constructor found for type '{TypeNameHelper.GetTypeDisplayName(type, fullName: false)}'.");
     }
 
+    [RequiresDynamicCode("MakeGenericMethod is possible used with ValueTypes and isn't compatible with AOT.")]
+    private static MethodInfo? GetIBindableFromHttpContextMethod(Type type)
+    {
+        // Check if parameter is bindable via static abstract method on IBindableFromHttpContext<TSelf>
+        foreach (var i in type.GetInterfaces())
+        {
+            if (i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IBindableFromHttpContext<>) && i.GetGenericArguments()[0] == type)
+            {
+                return BindAsyncMethod.MakeGenericMethod(type);
+            }
+        }
+
+        return null;
+    }
+
+    private static ValueTask<TValue?> BindAsync<TValue>(HttpContext httpContext, ParameterInfo parameter)
+        where TValue : class?, IBindableFromHttpContext<TValue>
+    {
+        return TValue.BindAsync(httpContext, parameter);
+    }
+
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
+    private static bool TryGetExplicitIParsableTryParseMethod(Type type, out MethodInfo methodInfo)
+    {
+        // Nested types by default use + as the delimeter between the containing type and the
+        // inner type. However when doing a method search this '+' symbol needs to be a '.' symbol.
+        var typeName = TypeNameHelper.GetTypeDisplayName(type, fullName: true, nestedTypeDelimiter: '.');
+        var name = $"System.IParsable<{typeName}>.TryParse";
+        methodInfo = type.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)!;
+        return methodInfo is not null;
+    }
+
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
     private MethodInfo? GetStaticMethodFromHierarchy(Type type, string name, Type[] parameterTypes, Func<MethodInfo, bool> validateReturnType)
     {
         bool IsMatch(MethodInfo? method) => method is not null && !method.IsAbstract && validateReturnType(method);
@@ -406,6 +476,7 @@ internal sealed class ParameterBindingMethodCache
         return candidateInterfaceMethodInfo;
     }
 
+    [RequiresUnreferencedCode("Performs reflection on type hierarchy. This cannot be statically analyzed.")]
     private static MethodInfo? GetAnyMethodFromHierarchy(Type type, string name)
     {
         // Find first incorrectly formatted method

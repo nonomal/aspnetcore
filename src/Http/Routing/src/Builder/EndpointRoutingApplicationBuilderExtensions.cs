@@ -9,12 +9,13 @@ using Microsoft.Extensions.Options;
 namespace Microsoft.AspNetCore.Builder;
 
 /// <summary>
-/// Constains extensions for configuring routing on an <see cref="IApplicationBuilder"/>.
+/// Contains extensions for configuring routing on an <see cref="IApplicationBuilder"/>.
 /// </summary>
 public static class EndpointRoutingApplicationBuilderExtensions
 {
     private const string EndpointRouteBuilder = "__EndpointRouteBuilder";
     private const string GlobalEndpointRouteBuilderKey = "__GlobalEndpointRouteBuilder";
+    private const string UseRoutingKey = "__UseRouting";
 
     /// <summary>
     /// Adds a <see cref="EndpointRoutingMiddleware"/> middleware to the specified <see cref="IApplicationBuilder"/>.
@@ -53,6 +54,10 @@ public static class EndpointRoutingApplicationBuilderExtensions
             endpointRouteBuilder = new DefaultEndpointRouteBuilder(builder);
             builder.Properties[EndpointRouteBuilder] = endpointRouteBuilder;
         }
+
+        // Add UseRouting function to properties so that middleware that can't reference UseRouting directly can call UseRouting via this property
+        // This is part of the global endpoint route builder concept
+        builder.Properties.TryAdd(UseRoutingKey, (object)UseRouting);
 
         return builder.UseMiddleware<EndpointRoutingMiddleware>(endpointRouteBuilder);
     }

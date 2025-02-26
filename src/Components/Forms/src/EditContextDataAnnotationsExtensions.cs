@@ -46,19 +46,18 @@ public static class EditContextDataAnnotationsExtensions
     /// <returns>A disposable object whose disposal will remove DataAnnotations validation support from the <see cref="EditContext"/>.</returns>
     public static IDisposable EnableDataAnnotationsValidation(this EditContext editContext, IServiceProvider serviceProvider)
     {
-        if (serviceProvider == null)
-        {
-            throw new ArgumentNullException(nameof(serviceProvider));
-        }
+        ArgumentNullException.ThrowIfNull(serviceProvider);
         return new DataAnnotationsEventSubscriptions(editContext, serviceProvider);
     }
 
     private static event Action? OnClearCache;
 
+#pragma warning disable IDE0051 // Remove unused private members
     private static void ClearCache(Type[]? _)
     {
         OnClearCache?.Invoke();
     }
+#pragma warning restore IDE0051 // Remove unused private members
 
     private sealed class DataAnnotationsEventSubscriptions : IDisposable
     {
@@ -83,6 +82,7 @@ public static class EditContextDataAnnotationsExtensions
             }
         }
 
+        [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Model types are expected to be defined in assemblies that do not get trimmed.")]
         private void OnFieldChanged(object? sender, FieldChangedEventArgs eventArgs)
         {
             var fieldIdentifier = eventArgs.FieldIdentifier;
@@ -108,6 +108,7 @@ public static class EditContextDataAnnotationsExtensions
             }
         }
 
+        [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Model types are expected to be defined in assemblies that do not get trimmed.")]
         private void OnValidationRequested(object? sender, ValidationRequestedEventArgs e)
         {
             var validationContext = new ValidationContext(_editContext.Model, _serviceProvider, items: null);
@@ -152,6 +153,7 @@ public static class EditContextDataAnnotationsExtensions
             }
         }
 
+        [UnconditionalSuppressMessage("Trimming", "IL2080", Justification = "Model types are expected to be defined in assemblies that do not get trimmed.")]
         private static bool TryGetValidatableProperty(in FieldIdentifier fieldIdentifier, [NotNullWhen(true)] out PropertyInfo? propertyInfo)
         {
             var cacheKey = (ModelType: fieldIdentifier.Model.GetType(), fieldIdentifier.FieldName);

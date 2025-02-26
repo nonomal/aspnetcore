@@ -18,7 +18,9 @@ public class AuthenticationBuilder
     /// </summary>
     /// <param name="services">The services being configured.</param>
     public AuthenticationBuilder(IServiceCollection services)
-        => Services = services;
+    {
+        Services = services;
+    }
 
     /// <summary>
     /// The services being configured.
@@ -29,12 +31,11 @@ public class AuthenticationBuilder
         where TOptions : AuthenticationSchemeOptions, new()
         where THandler : class, IAuthenticationHandler
     {
-        var state = new AddSchemeHelperState(typeof(THandler));
         Services.Configure<AuthenticationOptions>(o =>
         {
             o.AddScheme(authenticationScheme, scheme =>
             {
-                scheme.HandlerType = state.HandlerType;
+                scheme.HandlerType = typeof(THandler);
                 scheme.DisplayName = displayName;
             });
         });
@@ -48,25 +49,14 @@ public class AuthenticationBuilder
             return true;
         });
         Services.AddTransient<THandler>();
+        Services.TryAddEnumerable(ServiceDescriptor.Singleton<IPostConfigureOptions<TOptions>, PostConfigureAuthenticationSchemeOptions<TOptions>>());
         return this;
-    }
-
-    // Workaround for linker bug: https://github.com/dotnet/linker/issues/1981
-    private readonly struct AddSchemeHelperState
-    {
-        public AddSchemeHelperState([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type handlerType)
-        {
-            HandlerType = handlerType;
-        }
-
-        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)]
-        public Type HandlerType { get; }
     }
 
     /// <summary>
     /// Adds a <see cref="AuthenticationScheme"/> which can be used by <see cref="IAuthenticationService"/>.
     /// </summary>
-    /// <typeparam name="TOptions">The <see cref="AuthenticationSchemeOptions"/> type to configure the handler."/>.</typeparam>
+    /// <typeparam name="TOptions">The <see cref="AuthenticationSchemeOptions"/> type to configure the handler.</typeparam>
     /// <typeparam name="THandler">The <see cref="AuthenticationHandler{TOptions}"/> used to handle this scheme.</typeparam>
     /// <param name="authenticationScheme">The name of this scheme.</param>
     /// <param name="displayName">The display name of this scheme.</param>
@@ -80,7 +70,7 @@ public class AuthenticationBuilder
     /// <summary>
     /// Adds a <see cref="AuthenticationScheme"/> which can be used by <see cref="IAuthenticationService"/>.
     /// </summary>
-    /// <typeparam name="TOptions">The <see cref="AuthenticationSchemeOptions"/> type to configure the handler."/>.</typeparam>
+    /// <typeparam name="TOptions">The <see cref="AuthenticationSchemeOptions"/> type to configure the handler.</typeparam>
     /// <typeparam name="THandler">The <see cref="AuthenticationHandler{TOptions}"/> used to handle this scheme.</typeparam>
     /// <param name="authenticationScheme">The name of this scheme.</param>
     /// <param name="configureOptions">Used to configure the scheme options.</param>
@@ -94,7 +84,7 @@ public class AuthenticationBuilder
     /// Adds a <see cref="RemoteAuthenticationHandler{TOptions}"/> based <see cref="AuthenticationScheme"/> that supports remote authentication
     /// which can be used by <see cref="IAuthenticationService"/>.
     /// </summary>
-    /// <typeparam name="TOptions">The <see cref="RemoteAuthenticationOptions"/> type to configure the handler."/>.</typeparam>
+    /// <typeparam name="TOptions">The <see cref="RemoteAuthenticationOptions"/> type to configure the handler.</typeparam>
     /// <typeparam name="THandler">The <see cref="RemoteAuthenticationHandler{TOptions}"/> used to handle this scheme.</typeparam>
     /// <param name="authenticationScheme">The name of this scheme.</param>
     /// <param name="displayName">The display name of this scheme.</param>
@@ -132,6 +122,23 @@ public class AuthenticationBuilder
         public void PostConfigure(string? name, TOptions options)
         {
             options.SignInScheme ??= _authOptions.DefaultSignInScheme ?? _authOptions.DefaultScheme;
+        }
+    }
+
+    // Set TimeProvider from DI on all options instances, if not already set by tests.
+    private sealed class PostConfigureAuthenticationSchemeOptions<TOptions> : IPostConfigureOptions<TOptions>
+        where TOptions : AuthenticationSchemeOptions
+    {
+        public PostConfigureAuthenticationSchemeOptions(TimeProvider timeProvider)
+        {
+            TimeProvider = timeProvider;
+        }
+
+        private TimeProvider TimeProvider { get; }
+
+        public void PostConfigure(string? name, TOptions options)
+        {
+            options.TimeProvider ??= TimeProvider;
         }
     }
 }

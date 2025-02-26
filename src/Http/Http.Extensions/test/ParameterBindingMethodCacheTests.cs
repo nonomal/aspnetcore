@@ -41,6 +41,23 @@ public class ParameterBindingMethodCacheTests
         Assert.True(parameters[3].IsOut);
     }
 
+    [Fact]
+    public void FindUriTryCreateStringMethod_ReturnsTheExpectedUriTryCreateMethod()
+    {
+        var methodFound = new ParameterBindingMethodCache().FindTryParseMethod(typeof(Uri));
+
+        Assert.NotNull(methodFound);
+
+        var call = methodFound!(Expression.Variable(typeof(Uri), "parsedValue"), Expression.Constant(UriKind.RelativeOrAbsolute)) as MethodCallExpression;
+        Assert.NotNull(call);
+        var parameters = call!.Method.GetParameters();
+
+        Assert.Equal(3, parameters.Length);
+        Assert.Equal(typeof(string), parameters[0].ParameterType);
+        Assert.Equal(typeof(UriKind), parameters[1].ParameterType);
+        Assert.True(parameters[2].IsOut);
+    }
+
     [Theory]
     [InlineData(typeof(DateTime))]
     [InlineData(typeof(DateOnly))]
@@ -148,6 +165,14 @@ public class ParameterBindingMethodCacheTests
     }
 
     [Fact]
+    public void FindTryParseStringMethod_FindsExplicitlyImplementedIParsable()
+    {
+        var type = typeof(TodoWithExplicitIParsable);
+        var methodFound = new ParameterBindingMethodCache().FindTryParseMethod(type);
+        Assert.NotNull(methodFound);
+    }
+
+    [Fact]
     public void FindTryParseStringMethod_WorksForEnums()
     {
         var type = typeof(Choice);
@@ -183,7 +208,7 @@ public class ParameterBindingMethodCacheTests
 
         var parseEnum = Expression.Lambda<Func<string, Choice>>(Expression.Block(new[] { parsedValue },
             block,
-            parsedValue), ParameterBindingMethodCache.TempSourceStringExpr).Compile();
+            parsedValue), ParameterBindingMethodCache.SharedExpressions.TempSourceStringExpr).Compile();
 
         Assert.Equal(Choice.One, parseEnum("One"));
         Assert.Equal(Choice.Two, parseEnum("Two"));
@@ -205,7 +230,7 @@ public class ParameterBindingMethodCacheTests
 
         var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object>>>(
             Expression.Block(new[] { parsedValue }, methodFound.Expression!),
-            ParameterBindingMethodCache.HttpContextExpr).Compile();
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
 
         var httpContext = new DefaultHttpContext
         {
@@ -236,7 +261,7 @@ public class ParameterBindingMethodCacheTests
 
         var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object>>>(
             Expression.Block(new[] { parsedValue }, methodFound.Expression!),
-            ParameterBindingMethodCache.HttpContextExpr).Compile();
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
 
         var httpContext = new DefaultHttpContext
         {
@@ -302,6 +327,10 @@ public class ParameterBindingMethodCacheTests
                     {
                         GetFirstParameter((BindAsyncFromInterfaceWithParameterInfo arg) => BindAsyncFromInterfaceWithParameterInfoMethod(arg))
                     },
+                    new[]
+                    {
+                        GetFirstParameter((BindAsyncFromStaticAbstractInterfaceAndBindAsync arg) => BindAsyncFromImplicitStaticAbstractInterfaceMethodInsteadOfReflectionMatchedMethod(arg))
+                    },
                 };
         }
     }
@@ -321,10 +350,67 @@ public class ParameterBindingMethodCacheTests
     }
 
     [Fact]
+    public void HasBindAsyncMethod_ReturnsTrueForClassImplicitlyImplementingIBindableFromHttpContext()
+    {
+        var parameterInfo = GetFirstParameter((BindAsyncFromImplicitStaticAbstractInterface arg) => BindAsyncFromImplicitStaticAbstractInterfaceMethod(arg));
+        Assert.True(new ParameterBindingMethodCache().HasBindAsyncMethod(parameterInfo));
+    }
+
+    [Fact]
+    public void HasBindAsyncMethod_ReturnsTrueForClassExplicitlyImplementingIBindableFromHttpContext()
+    {
+        var parameterInfo = GetFirstParameter((BindAsyncFromExplicitStaticAbstractInterface arg) => BindAsyncFromExplicitStaticAbstractInterfaceMethod(arg));
+        Assert.True(new ParameterBindingMethodCache().HasBindAsyncMethod(parameterInfo));
+    }
+
+    [Fact]
+    public void HasBindAsyncMethod_ReturnsTrueForClassImplementingIBindableFromHttpContextAndNonInterfaceBindAsyncMethod()
+    {
+        var parameterInfo = GetFirstParameter((BindAsyncFromStaticAbstractInterfaceAndBindAsync arg) => BindAsyncFromImplicitStaticAbstractInterfaceMethodInsteadOfReflectionMatchedMethod(arg));
+        Assert.True(new ParameterBindingMethodCache().HasBindAsyncMethod(parameterInfo));
+    }
+
+    [Fact]
     public void FindBindAsyncMethod_FindsNonNullableReturningBindAsyncMethodGivenNullableType()
     {
         var parameterInfo = GetFirstParameter((BindAsyncStruct? arg) => BindAsyncNullableStructMethod(arg));
         Assert.True(new ParameterBindingMethodCache().HasBindAsyncMethod(parameterInfo));
+    }
+
+    [Fact]
+    public async Task FindBindAsyncMethod_FindsForClassImplicitlyImplementingIBindableFromHttpContext()
+    {
+        var parameterInfo = GetFirstParameter((BindAsyncFromImplicitStaticAbstractInterface arg) => BindAsyncFromImplicitStaticAbstractInterfaceMethod(arg));
+        var cache = new ParameterBindingMethodCache();
+        Assert.True(cache.HasBindAsyncMethod(parameterInfo));
+        var methodFound = cache.FindBindAsyncMethod(parameterInfo);
+
+        var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object?>>>(methodFound.Expression!,
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
+
+        var httpContext = new DefaultHttpContext();
+
+        var result = await parseHttpContext(httpContext);
+        Assert.NotNull(result);
+        Assert.IsType<BindAsyncFromImplicitStaticAbstractInterface>(result);
+    }
+
+    [Fact]
+    public async Task FindBindAsyncMethod_FindsForClassExplicitlyImplementingIBindableFromHttpContext()
+    {
+        var parameterInfo = GetFirstParameter((BindAsyncFromExplicitStaticAbstractInterface arg) => BindAsyncFromExplicitStaticAbstractInterfaceMethod(arg));
+        var cache = new ParameterBindingMethodCache();
+        Assert.True(cache.HasBindAsyncMethod(parameterInfo));
+        var methodFound = cache.FindBindAsyncMethod(parameterInfo);
+
+        var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object?>>>(methodFound.Expression!,
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
+
+        var httpContext = new DefaultHttpContext();
+
+        var result = await parseHttpContext(httpContext);
+        Assert.NotNull(result);
+        Assert.IsType<BindAsyncFromExplicitStaticAbstractInterface>(result);
     }
 
     [Fact]
@@ -336,7 +422,7 @@ public class ParameterBindingMethodCacheTests
         var methodFound = cache.FindBindAsyncMethod(parameterInfo);
 
         var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object>>>(methodFound.Expression!,
-            ParameterBindingMethodCache.HttpContextExpr).Compile();
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
 
         var httpContext = new DefaultHttpContext();
 
@@ -352,11 +438,30 @@ public class ParameterBindingMethodCacheTests
         var methodFound = cache.FindBindAsyncMethod(parameterInfo);
 
         var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object>>>(methodFound.Expression!,
-            ParameterBindingMethodCache.HttpContextExpr).Compile();
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
 
         var httpContext = new DefaultHttpContext();
 
         Assert.Null(await parseHttpContext(httpContext));
+    }
+
+    [Fact]
+    public async Task FindBindAsyncMethod_FindsMethodFromStaticAbstractInterfaceWhenValidNonInterfaceMethodAlsoExists()
+    {
+        var parameterInfo = GetFirstParameter((BindAsyncFromStaticAbstractInterfaceAndBindAsync arg) => BindAsyncFromImplicitStaticAbstractInterfaceMethodInsteadOfReflectionMatchedMethod(arg));
+        var cache = new ParameterBindingMethodCache();
+        Assert.True(cache.HasBindAsyncMethod(parameterInfo));
+        var methodFound = cache.FindBindAsyncMethod(parameterInfo);
+
+        var parseHttpContext = Expression.Lambda<Func<HttpContext, ValueTask<object>>>(methodFound.Expression!,
+            ParameterBindingMethodCache.SharedExpressions.HttpContextExpr).Compile();
+
+        var httpContext = new DefaultHttpContext();
+        var result = await parseHttpContext(httpContext);
+
+        Assert.NotNull(result);
+        Assert.IsType<BindAsyncFromStaticAbstractInterfaceAndBindAsync>(result);
+        Assert.Equal(BindAsyncSource.InterfaceStaticAbstractImplicit, ((BindAsyncFromStaticAbstractInterfaceAndBindAsync)result).BoundFrom);
     }
 
     [Theory]
@@ -499,6 +604,7 @@ public class ParameterBindingMethodCacheTests
                 typeof(BindAsyncWithParameterInfoWrongTypeInherit),
                 typeof(BindAsyncWrongTypeFromInterface),
                 typeof(BindAsyncBothBadMethods),
+                typeof(BindAsyncFromStaticAbstractInterfaceWrongType)
             };
         }
     }
@@ -627,7 +733,6 @@ public class ParameterBindingMethodCacheTests
     private static void BindAsyncStructMethod(BindAsyncStruct arg) { }
     private static void BindAsyncNullableStructMethod(BindAsyncStruct? arg) { }
     private static void NullableReturningBindAsyncStructMethod(NullableReturningBindAsyncStruct arg) { }
-
     private static void BindAsyncSingleArgRecordMethod(BindAsyncSingleArgRecord arg) { }
     private static void BindAsyncSingleArgStructMethod(BindAsyncSingleArgStruct arg) { }
     private static void InheritBindAsyncMethod(InheritBindAsync arg) { }
@@ -639,11 +744,21 @@ public class ParameterBindingMethodCacheTests
     private static void BindAsyncFromInterfaceWithParameterInfoMethod(BindAsyncFromInterfaceWithParameterInfo args) { }
     private static void BindAsyncFallbackMethod(BindAsyncFallsBack? arg) { }
     private static void BindAsyncBadMethodMethod(BindAsyncBadMethod? arg) { }
+    private static void BindAsyncFromImplicitStaticAbstractInterfaceMethod(BindAsyncFromImplicitStaticAbstractInterface arg) { }
+    private static void BindAsyncFromExplicitStaticAbstractInterfaceMethod(BindAsyncFromExplicitStaticAbstractInterface arg) { }
+    private static void BindAsyncFromImplicitStaticAbstractInterfaceMethodInsteadOfReflectionMatchedMethod(BindAsyncFromStaticAbstractInterfaceAndBindAsync arg) { }
+    private static void BindAsyncFromStaticAbstractInterfaceWrongTypeMethod(BindAsyncFromStaticAbstractInterfaceWrongType arg) { }
 
     private static ParameterInfo GetFirstParameter<T>(Expression<Action<T>> expr)
     {
         var mc = (MethodCallExpression)expr.Body;
         return mc.Method.GetParameters()[0];
+    }
+
+    private static ParameterInfo GetParameterAtIndex<T>(Expression<Action<T>> expr, int paramIndex)
+    {
+        var mc = (MethodCallExpression)expr.Body;
+        return mc.Method.GetParameters()[paramIndex];
     }
 
     private record TryParseStringRecord(int Value)
@@ -1347,12 +1462,78 @@ public class ParameterBindingMethodCacheTests
         }
     }
 
+    private class BindAsyncFromImplicitStaticAbstractInterface : IBindableFromHttpContext<BindAsyncFromImplicitStaticAbstractInterface>
+    {
+        public static ValueTask<BindAsyncFromImplicitStaticAbstractInterface?> BindAsync(HttpContext context, ParameterInfo parameter)
+        {
+            return ValueTask.FromResult<BindAsyncFromImplicitStaticAbstractInterface?>(new());
+        }
+    }
+
+    private class BindAsyncFromExplicitStaticAbstractInterface : IBindableFromHttpContext<BindAsyncFromExplicitStaticAbstractInterface>
+    {
+        static ValueTask<BindAsyncFromExplicitStaticAbstractInterface?> IBindableFromHttpContext<BindAsyncFromExplicitStaticAbstractInterface>.BindAsync(HttpContext context, ParameterInfo parameter)
+        {
+            return ValueTask.FromResult<BindAsyncFromExplicitStaticAbstractInterface?>(new());
+        }
+    }
+
+    private class BindAsyncFromStaticAbstractInterfaceAndBindAsync : IBindableFromHttpContext<BindAsyncFromStaticAbstractInterfaceAndBindAsync>
+    {
+        public BindAsyncFromStaticAbstractInterfaceAndBindAsync(BindAsyncSource boundFrom)
+        {
+            BoundFrom = boundFrom;
+        }
+
+        public BindAsyncSource BoundFrom { get; }
+
+        // Implicit interface implementation
+        public static ValueTask<BindAsyncFromStaticAbstractInterfaceAndBindAsync?> BindAsync(HttpContext context, ParameterInfo parameter)
+        {
+            return ValueTask.FromResult<BindAsyncFromStaticAbstractInterfaceAndBindAsync?>(new(BindAsyncSource.InterfaceStaticAbstractImplicit));
+        }
+
+        // Late-bound pattern based match in RequestDelegateFactory
+        public static ValueTask<BindAsyncFromStaticAbstractInterfaceAndBindAsync?> BindAsync(HttpContext context)
+        {
+            return ValueTask.FromResult<BindAsyncFromStaticAbstractInterfaceAndBindAsync?>(new(BindAsyncSource.Reflection));
+        }
+    }
+
+    private class BindAsyncFromStaticAbstractInterfaceWrongType : IBindableFromHttpContext<BindAsyncFromImplicitStaticAbstractInterface>
+    {
+        public static ValueTask<BindAsyncFromImplicitStaticAbstractInterface?> BindAsync(HttpContext context, ParameterInfo parameter)
+        {
+            return ValueTask.FromResult<BindAsyncFromImplicitStaticAbstractInterface?>(new());
+        }
+    }
+
+    private enum BindAsyncSource
+    {
+        Reflection,
+        InterfaceStaticAbstractImplicit,
+        InterfaceStaticAbstractExplicit
+    }
+
     private class MockParameterInfo : ParameterInfo
     {
         public MockParameterInfo(Type type, string name)
         {
             ClassImpl = type;
             NameImpl = name;
+        }
+    }
+
+    public class TodoWithExplicitIParsable : IParsable<TodoWithExplicitIParsable>
+    {
+        static TodoWithExplicitIParsable IParsable<TodoWithExplicitIParsable>.Parse(string s, IFormatProvider? provider)
+        {
+            throw new NotImplementedException();
+        }
+
+        static bool IParsable<TodoWithExplicitIParsable>.TryParse(string? s, IFormatProvider? provider, out TodoWithExplicitIParsable result)
+        {
+            throw new NotImplementedException();
         }
     }
 }

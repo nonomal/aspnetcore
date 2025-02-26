@@ -79,9 +79,12 @@ internal sealed class InvokeCommand : HelpCommandBase
                             projectName,
                             targetFramework.Version));
                     }
+                    else
+                    {
+                        toolsDirectory = Path.Combine(thisPath, $"net{targetFramework.Version}");
+                    }
 
                     executable = DotNetMuxer.MuxerPathOrDefault();
-                    toolsDirectory = Path.Combine(thisPath, "netcoreapp2.1");
 
                     args.Add("exec");
                     args.Add("--depsFile");

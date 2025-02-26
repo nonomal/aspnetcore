@@ -1,16 +1,13 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Collections;
 using System.Diagnostics;
-using System.Linq;
 using System.Text;
 using System.Text.Json;
 using Google.Api;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Grpc.Core;
-using Grpc.Gateway.Runtime;
 using Grpc.Shared;
 using Microsoft.AspNetCore.Grpc.JsonTranscoding.Internal.Json;
 using Microsoft.AspNetCore.Http;
@@ -26,12 +23,11 @@ internal static class JsonRequestHelpers
     public const string JsonContentType = "application/json";
     public const string JsonContentTypeWithCharset = "application/json; charset=utf-8";
 
+    public const string StatusDetailsTrailerName = "grpc-status-details-bin";
+
     public static bool HasJsonContentType(HttpRequest request, out StringSegment charset)
     {
-        if (request == null)
-        {
-            throw new ArgumentNullException(nameof(request));
-        }
+        ArgumentNullException.ThrowIfNull(request);
 
         if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var mt))
         {
@@ -88,7 +84,7 @@ internal static class JsonRequestHelpers
         }
     }
 
-    public static async ValueTask SendErrorResponse(HttpResponse response, Encoding encoding, Status status, JsonSerializerOptions options)
+    public static async ValueTask SendErrorResponse(HttpResponse response, Encoding encoding, Metadata trailers, Status status, JsonSerializerOptions options)
     {
         if (!response.HasStarted)
         {
@@ -96,14 +92,31 @@ internal static class JsonRequestHelpers
             response.ContentType = MediaType.ReplaceEncoding("application/json", encoding);
         }
 
-        var e = new Error
+        var e = GetStatusDetails(trailers) ?? new Google.Rpc.Status
         {
-            Error_ = status.Detail,
             Message = status.Detail,
             Code = (int)status.StatusCode
         };
 
         await WriteResponseMessage(response, encoding, e, options, CancellationToken.None);
+
+        static Google.Rpc.Status? GetStatusDetails(Metadata trailers)
+        {
+            var statusDetails = trailers.Get(StatusDetailsTrailerName);
+            if (statusDetails?.IsBinary == true)
+            {
+                try
+                {
+                    return Google.Rpc.Status.Parser.ParseFrom(statusDetails.ValueBytes);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Error when parsing the '{StatusDetailsTrailerName}' trailer.", ex);
+                }
+            }
+
+            return null;
+        }
     }
 
     public static int MapStatusCodeToHttpStatus(StatusCode statusCode)
@@ -203,8 +216,17 @@ internal static class JsonRequestHelpers
 
                             // TODO: JsonSerializer currently doesn't support deserializing values onto an existing object or collection.
                             // Either update this to use new functionality in JsonSerializer or improve work-around perf.
-                            type = JsonConverterHelper.GetFieldType(serverCallContext.DescriptorInfo.BodyFieldDescriptors.Last());
-                            type = typeof(List<>).MakeGenericType(type);
+                            type = JsonConverterHelper.GetFieldType(serverCallContext.DescriptorInfo.BodyFieldDescriptor);
+
+                            var args = type.GetGenericArguments();
+                            if (serverCallContext.DescriptorInfo.BodyFieldDescriptor.IsMap)
+                            {
+                                type = typeof(Dictionary<,>).MakeGenericType(args[0], args[1]);
+                            }
+                            else
+                            {
+                                type = typeof(List<>).MakeGenericType(args[0]);
+                            }
 
                             GrpcServerLog.DeserializingMessage(serverCallContext.Logger, type);
 
@@ -232,10 +254,13 @@ internal static class JsonRequestHelpers
                     }
                 }
 
-                if (serverCallContext.DescriptorInfo.BodyFieldDescriptors != null)
+                if (serverCallContext.DescriptorInfo.BodyFieldDescriptor != null)
                 {
                     requestMessage = (IMessage)Activator.CreateInstance<TRequest>();
-                    ServiceDescriptorHelpers.RecursiveSetValue(requestMessage, serverCallContext.DescriptorInfo.BodyFieldDescriptors, bodyContent); // TODO - check nullability
+
+                    // The spec says that request body must be on the top-level message.
+                    // Recursive request body isn't supported.
+                    ServiceDescriptorHelpers.SetValue(requestMessage, serverCallContext.DescriptorInfo.BodyFieldDescriptor, bodyContent);
                 }
                 else
                 {
@@ -257,7 +282,7 @@ internal static class JsonRequestHelpers
                 var routeValue = serverCallContext.HttpContext.Request.RouteValues[parameterDescriptor.Key];
                 if (routeValue != null)
                 {
-                    ServiceDescriptorHelpers.RecursiveSetValue(requestMessage, parameterDescriptor.Value, routeValue);
+                    ServiceDescriptorHelpers.RecursiveSetValue(requestMessage, parameterDescriptor.Value.DescriptorsPath, routeValue);
                 }
             }
 
@@ -338,7 +363,7 @@ internal static class JsonRequestHelpers
     {
         return serverCallContext.DescriptorInfo.PathDescriptorsCache.GetOrAdd(path, p =>
         {
-            ServiceDescriptorHelpers.TryResolveDescriptors(requestMessage.Descriptor, p, out var pathDescriptors);
+            ServiceDescriptorHelpers.TryResolveDescriptors(requestMessage.Descriptor, p.Split('.'), allowJsonName: true, out var pathDescriptors);
             return pathDescriptors;
         });
     }
@@ -356,7 +381,8 @@ internal static class JsonRequestHelpers
 
             if (serverCallContext.DescriptorInfo.ResponseBodyDescriptor != null)
             {
-                // TODO: Support recursive response body?
+                // The spec says that response body must be on the top-level message.
+                // Recursive response body isn't supported.
                 responseBody = serverCallContext.DescriptorInfo.ResponseBodyDescriptor.Accessor.GetValue((IMessage)message);
                 responseType = JsonConverterHelper.GetFieldType(serverCallContext.DescriptorInfo.ResponseBodyDescriptor);
             }
@@ -382,17 +408,24 @@ internal static class JsonRequestHelpers
     {
         if (serverCallContext.DescriptorInfo.BodyDescriptor != null)
         {
-            if (serverCallContext.DescriptorInfo.BodyFieldDescriptors == null || serverCallContext.DescriptorInfo.BodyFieldDescriptors.Count == 0)
+            var bodyFieldName = serverCallContext.DescriptorInfo.BodyFieldDescriptor?.Name;
+
+            // Null field name indicates "*" which means the entire message is bound to the body.
+            if (bodyFieldName == null)
             {
                 return false;
             }
 
-            if (variable == serverCallContext.DescriptorInfo.BodyFieldDescriptorsPath)
+            // Exact match
+            if (variable == bodyFieldName)
             {
                 return false;
             }
 
-            if (variable.StartsWith(serverCallContext.DescriptorInfo.BodyFieldDescriptorsPath!, StringComparison.Ordinal))
+            // Nested field of field name.
+            if (bodyFieldName.Length + 1 < variable.Length &&
+                variable.StartsWith(bodyFieldName, StringComparison.Ordinal) &&
+                variable[bodyFieldName.Length] == '.')
             {
                 return false;
             }

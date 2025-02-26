@@ -1,23 +1,20 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using Microsoft.Extensions.Configuration.UserSecrets;
 
 namespace Microsoft.AspNetCore.Authentication.JwtBearer.Tools.Tests;
 
-public class UserJwtsTestFixture : IDisposable
+public sealed class UserJwtsTestFixture : IDisposable
 {
-    private Stack<Action> _disposables = new Stack<Action>();
-    private string TestSecretsId = Guid.NewGuid().ToString();
+    private readonly Stack<Action> _disposables = new();
+    internal string TestSecretsId { get; private set; }
 
     private const string ProjectTemplate = @"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     {0}
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
@@ -25,12 +22,36 @@ public class UserJwtsTestFixture : IDisposable
 
     private const string LaunchSettingsTemplate = @"
 {
+  ""iisSettings"": {
+    ""windowsAuthentication"": false,
+    ""anonymousAuthentication"": true,
+    ""iisExpress"": {
+      ""applicationUrl"": ""http://localhost:23528"",
+      ""sslPort"": 44395
+    }
+  },
   ""profiles"": {
-    ""HttpApiSampleApp"": {
+    ""HttpWebApp"": {
       ""commandName"": ""Project"",
       ""dotnetRunMessages"": true,
       ""launchBrowser"": true,
       ""applicationUrl"": ""https://localhost:5001;http://localhost:5000"",
+      ""environmentVariables"": {
+        ""ASPNETCORE_ENVIRONMENT"": ""Development""
+      }
+    },
+    ""HttpsOnly"": {
+      ""commandName"": ""Project"",
+      ""dotnetRunMessages"": true,
+      ""launchBrowser"": true,
+      ""applicationUrl"": ""https://localhost:5001"",
+      ""environmentVariables"": {
+        ""ASPNETCORE_ENVIRONMENT"": ""Development""
+      }
+    },
+    ""IIS Express"": {
+      ""commandName"": ""IISExpress"",
+      ""launchBrowser"": true,
       ""environmentVariables"": {
         ""ASPNETCORE_ENVIRONMENT"": ""Development""
       }
@@ -42,6 +63,7 @@ public class UserJwtsTestFixture : IDisposable
     {
         var projectPath = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "userjwtstest", Guid.NewGuid().ToString()));
         Directory.CreateDirectory(Path.Combine(projectPath.FullName, "Properties"));
+        TestSecretsId = Guid.NewGuid().ToString("N");
         var prop = hasSecret ? $"<UserSecretsId>{TestSecretsId}</UserSecretsId>" : string.Empty;
         if (hasSecret)
         {
@@ -59,6 +81,10 @@ public class UserJwtsTestFixture : IDisposable
             Path.Combine(projectPath.FullName, "appsettings.Development.json"),
             "{}");
 
+        File.WriteAllText(
+            Path.Combine(projectPath.FullName, "appsettings.Local.json"),
+            "{}");
+
         if (hasSecret)
         {
             _disposables.Push(() =>
@@ -71,7 +97,7 @@ public class UserJwtsTestFixture : IDisposable
                 catch { }
             });
         }
-     
+
         _disposables.Push(() => TryDelete(projectPath.FullName));
 
         return projectPath.FullName;

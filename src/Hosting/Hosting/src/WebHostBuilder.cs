@@ -91,10 +91,7 @@ public class WebHostBuilder : IWebHostBuilder
     /// <returns>The <see cref="IWebHostBuilder"/>.</returns>
     public IWebHostBuilder ConfigureServices(Action<IServiceCollection> configureServices)
     {
-        if (configureServices == null)
-        {
-            throw new ArgumentNullException(nameof(configureServices));
-        }
+        ArgumentNullException.ThrowIfNull(configureServices);
 
         return ConfigureServices((_, services) => configureServices(services));
     }
@@ -182,7 +179,7 @@ public class WebHostBuilder : IWebHostBuilder
             var assemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var assemblyName in _options.GetFinalHostingStartupAssemblies())
             {
-                if (!assemblyNames.Add(assemblyName))
+                if (!assemblyNames.Add(assemblyName) && logger.IsEnabled(LogLevel.Warning))
                 {
                     logger.LogWarning($"The assembly {assemblyName} was specified multiple times. Hosting startup assemblies should only be specified once.");
                 }
@@ -297,6 +294,9 @@ public class WebHostBuilder : IWebHostBuilder
         services.AddOptions();
         services.AddLogging();
 
+        services.AddMetrics();
+        services.TryAddSingleton<HostingMetrics>();
+
         services.AddTransient<IServiceProviderFactory<IServiceCollection>, DefaultServiceProviderFactory>();
 
         if (!string.IsNullOrEmpty(_options.StartupAssembly))
@@ -310,6 +310,7 @@ public class WebHostBuilder : IWebHostBuilder
     }
 
     [UnconditionalSuppressMessage("Trimmer", "IL2077", Justification = "Finding startup type in assembly requires unreferenced code. Surfaced to user in UseStartup(startupAssemblyName).")]
+    [UnconditionalSuppressMessage("Trimmer", "IL2072", Justification = "Finding startup type in assembly requires unreferenced code. Surfaced to user in UseStartup(startupAssemblyName).")]
     private void ScanAssemblyAndRegisterStartup(ServiceCollection services, string startupAssemblyName)
     {
         try

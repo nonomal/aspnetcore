@@ -19,13 +19,14 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Infrastructure;
 using Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTransport;
-using Microsoft.AspNetCore.Testing;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
 using Moq;
 using Xunit;
 using BadHttpRequestException = Microsoft.AspNetCore.Server.Kestrel.Core.BadHttpRequestException;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests;
 
@@ -140,7 +141,10 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
     [Fact]
     public async Task ResponseBodyWriteAsyncCanBeCancelled()
     {
-        var serviceContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+
+        var serviceContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
         var cts = new CancellationTokenSource();
         var appTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writeBlockedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -202,6 +206,8 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
                 await Assert.ThrowsAsync<OperationCanceledException>(() => appTcs.Task).DefaultTimeout();
             }
         }
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.Equal(ConnectionEndReason.WriteCanceled, m.Tags));
     }
 
     [Fact]
@@ -294,7 +300,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
                 return Task.CompletedTask;
             },
             expectedClientStatusCode: null,
-            expectedServerStatusCode: 0);
+            expectedServerStatusCode: (HttpStatusCode)499);
     }
 
     [Fact]
@@ -309,7 +315,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
                 throw new Exception();
             },
             expectedClientStatusCode: null,
-            expectedServerStatusCode: 0);
+            expectedServerStatusCode: (HttpStatusCode)499);
     }
 
     [Fact]
@@ -591,6 +597,193 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
         }
     }
 
+    public static IEnumerable<object[]> Get1xxAnd204MethodCombinations()
+    {
+        // Status codes to test
+        var statusCodes = new int[] {
+                StatusCodes.Status100Continue,
+                StatusCodes.Status101SwitchingProtocols,
+                StatusCodes.Status102Processing,
+                StatusCodes.Status204NoContent,
+            };
+
+        // HTTP methods to test
+        var methods = new HttpMethod[] {
+                HttpMethod.Connect,
+                HttpMethod.Delete,
+                HttpMethod.Get,
+                HttpMethod.Head,
+                HttpMethod.Options,
+                HttpMethod.Patch,
+                HttpMethod.Post,
+                HttpMethod.Put,
+                HttpMethod.Trace
+            };
+
+        foreach (var statusCode in statusCodes)
+        {
+            foreach (var method in methods)
+            {
+                yield return new object[] { statusCode, method };
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Get1xxAnd204MethodCombinations))]
+    public async Task AttemptingToWriteNonzeroContentLengthFailsFor1xxAnd204Responses(int statusCode, HttpMethod method)
+        => await AttemptingToWriteNonzeroContentLengthFails(statusCode, method).ConfigureAwait(true);
+
+    [Theory]
+    [MemberData(nameof(Get1xxAnd204MethodCombinations))]
+    public async Task AttemptingToWriteZeroContentLengthFor1xxAnd204Responses_ContentLengthRemoved(int statusCode, HttpMethod method)
+        => await AttemptingToWriteZeroContentLength_ContentLengthRemoved(statusCode, method).ConfigureAwait(true);
+
+    [Theory]
+    [InlineData(StatusCodes.Status200OK)]
+    [InlineData(StatusCodes.Status201Created)]
+    [InlineData(StatusCodes.Status202Accepted)]
+    [InlineData(StatusCodes.Status203NonAuthoritative)]
+    [InlineData(StatusCodes.Status204NoContent)]
+    [InlineData(StatusCodes.Status205ResetContent)]
+    [InlineData(StatusCodes.Status206PartialContent)]
+    [InlineData(StatusCodes.Status207MultiStatus)]
+    [InlineData(StatusCodes.Status208AlreadyReported)]
+    [InlineData(StatusCodes.Status226IMUsed)]
+    public async Task AttemptingToWriteNonzeroContentLengthFailsFor2xxResponsesOnConnect(int statusCode)
+        => await AttemptingToWriteNonzeroContentLengthFails(statusCode, HttpMethod.Connect).ConfigureAwait(true);
+
+    [Theory]
+    [InlineData(StatusCodes.Status200OK)]
+    [InlineData(StatusCodes.Status201Created)]
+    [InlineData(StatusCodes.Status202Accepted)]
+    [InlineData(StatusCodes.Status203NonAuthoritative)]
+    [InlineData(StatusCodes.Status204NoContent)]
+    [InlineData(StatusCodes.Status205ResetContent)]
+    [InlineData(StatusCodes.Status206PartialContent)]
+    [InlineData(StatusCodes.Status207MultiStatus)]
+    [InlineData(StatusCodes.Status208AlreadyReported)]
+    [InlineData(StatusCodes.Status226IMUsed)]
+    public async Task AttemptingToWriteZeroContentLengthFor2xxResponsesOnConnect_ContentLengthRemoved(int statusCode)
+        => await AttemptingToWriteZeroContentLength_ContentLengthRemoved(statusCode, HttpMethod.Connect).ConfigureAwait(true);
+
+    private async Task AttemptingToWriteNonzeroContentLengthFails(int statusCode, HttpMethod method)
+    {
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+
+        var responseWriteTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using (var server = new TestServer(async httpContext =>
+        {
+            httpContext.Response.StatusCode = statusCode;
+            httpContext.Response.Headers.ContentLength = 1;
+
+            try
+            {
+                await httpContext.Response.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                responseWriteTcs.TrySetException(ex);
+                throw;
+            }
+
+            responseWriteTcs.TrySetResult();
+        }, new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory))))
+        {
+            using (var connection = server.CreateConnection())
+            {
+                await connection.Send(
+                    $"{HttpUtilities.MethodToString(method)} / HTTP/1.1",
+                    "Host:",
+                    "",
+                    "");
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => responseWriteTcs.Task).DefaultTimeout();
+                Assert.Equal(CoreStrings.FormatHeaderNotAllowedOnResponse("Content-Length", statusCode), ex.Message);
+            }
+        }
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.NoError(m.Tags));
+    }
+
+    private async Task AttemptingToWriteZeroContentLength_ContentLengthRemoved(int statusCode, HttpMethod method)
+    {
+        var responseWriteTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using (var server = new TestServer(async httpContext =>
+        {
+            httpContext.Response.StatusCode = statusCode;
+            httpContext.Response.Headers.ContentLength = 0;
+
+            try
+            {
+                await httpContext.Response.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                responseWriteTcs.TrySetException(ex);
+                throw;
+            }
+
+            responseWriteTcs.TrySetResult();
+        }, new TestServiceContext(LoggerFactory)))
+        {
+            using (var connection = server.CreateConnection())
+            {
+                await connection.Send(
+                    $"{HttpUtilities.MethodToString(method)} / HTTP/1.1",
+                    "Host:",
+                    "",
+                    "");
+
+                await connection.Receive(
+                    $"HTTP/1.1 {Encoding.ASCII.GetString(ReasonPhrases.ToStatusBytes(statusCode))}",
+                    $"Date: {server.Context.DateHeaderValue}",
+                    "",
+                    "");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AttemptingToWriteNonzeroContentLengthFailsFor205Response()
+    {
+        var responseWriteTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using (var server = new TestServer(async httpContext =>
+        {
+            httpContext.Response.StatusCode = 205;
+            httpContext.Response.Headers.ContentLength = 1;
+
+            try
+            {
+                await httpContext.Response.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                responseWriteTcs.TrySetException(ex);
+                throw;
+            }
+
+            responseWriteTcs.TrySetResult();
+        }, new TestServiceContext(LoggerFactory)))
+        {
+            using (var connection = server.CreateConnection())
+            {
+                await connection.Send(
+                    "GET / HTTP/1.1",
+                    "Host:",
+                    "",
+                    "");
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => responseWriteTcs.Task).DefaultTimeout();
+                Assert.Equal(CoreStrings.NonzeroContentLengthNotAllowedOn205, ex.Message);
+            }
+        }
+    }
+
     [Theory]
     [InlineData(StatusCodes.Status204NoContent)]
     [InlineData(StatusCodes.Status304NotModified)]
@@ -753,7 +946,10 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
     [Fact]
     public async Task ThrowsAndClosesConnectionWhenAppWritesMoreThanContentLengthWrite()
     {
-        var serviceContext = new TestServiceContext(LoggerFactory)
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+
+        var serviceContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory))
         {
             ServerOptions = { AllowSynchronousIO = true }
         };
@@ -788,12 +984,16 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
         Assert.Equal(
             $"Response Content-Length mismatch: too many bytes written (12 of 11).",
             logMessage.Exception.Message);
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.Equal(ConnectionEndReason.ResponseContentLengthMismatch, m.Tags));
     }
 
     [Fact]
     public async Task ThrowsAndClosesConnectionWhenAppWritesMoreThanContentLengthWriteAsync()
     {
-        var serviceContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+        var serviceContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
 
         await using (var server = new TestServer(async httpContext =>
         {
@@ -822,6 +1022,8 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
         Assert.Equal(
             $"Response Content-Length mismatch: too many bytes written (12 of 11).",
             logMessage.Exception.Message);
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.Equal(ConnectionEndReason.ResponseContentLengthMismatch, m.Tags));
     }
 
     [Fact]
@@ -1052,7 +1254,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
         }
 
         // With the server disposed we know all connections were drained and all messages were logged.
-        Assert.Empty(TestSink.Writes.Where(c => c.EventId.Name == "ApplicationError"));
+        Assert.DoesNotContain(TestSink.Writes, c => c.EventId.Name == "ApplicationError");
     }
 
     [Fact]
@@ -1127,7 +1329,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
             }
         }
 
-        Assert.Empty(LogMessages.Where(message => message.LogLevel == LogLevel.Error));
+        Assert.DoesNotContain(LogMessages, message => message.LogLevel == LogLevel.Error);
     }
 
     // https://tools.ietf.org/html/rfc7230#section-3.3.3
@@ -1163,7 +1365,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
             }
         }
 
-        Assert.Empty(LogMessages.Where(message => message.LogLevel == LogLevel.Error));
+        Assert.DoesNotContain(LogMessages, message => message.LogLevel == LogLevel.Error);
     }
 
     // https://tools.ietf.org/html/rfc7230#section-3.3.3
@@ -1199,7 +1401,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
             }
         }
 
-        Assert.Empty(LogMessages.Where(message => message.LogLevel == LogLevel.Error));
+        Assert.DoesNotContain(LogMessages, message => message.LogLevel == LogLevel.Error);
     }
 
     [Fact]
@@ -2213,7 +2415,9 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
     [Fact]
     public async Task ThrowingResultsIn500Response()
     {
-        var testContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+        var testContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
 
         bool onStartingCalled = false;
 
@@ -2258,6 +2462,8 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
 
         Assert.False(onStartingCalled);
         Assert.Equal(2, LogMessages.Where(message => message.LogLevel == LogLevel.Error).Count());
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.NoError(m.Tags));
     }
 
     [Fact]
@@ -2412,7 +2618,9 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
     [Fact]
     public async Task ThrowingInOnCompletedIsLogged()
     {
-        var testContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+        var testContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
 
         var onCompletedCalled1 = false;
         var onCompletedCalled2 = false;
@@ -2456,12 +2664,16 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
         Assert.Equal(2, LogMessages.Where(message => message.LogLevel == LogLevel.Error).Count());
         Assert.True(onCompletedCalled1);
         Assert.True(onCompletedCalled2);
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.NoError(m.Tags));
     }
 
     [Fact]
     public async Task ThrowingAfterWritingKillsConnection()
     {
-        var testContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+        var testContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
 
         bool onStartingCalled = false;
 
@@ -2497,12 +2709,16 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
 
         Assert.True(onStartingCalled);
         Assert.Single(LogMessages, message => message.LogLevel == LogLevel.Error);
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.Equal(ConnectionEndReason.ErrorAfterStartingResponse, m.Tags));
     }
 
     [Fact]
     public async Task ThrowingAfterPartialWriteKillsConnection()
     {
-        var testContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+        var testContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
 
         bool onStartingCalled = false;
 
@@ -2538,6 +2754,8 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
 
         Assert.True(onStartingCalled);
         Assert.Single(LogMessages, message => message.LogLevel == LogLevel.Error);
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.Equal(ConnectionEndReason.ErrorAfterStartingResponse, m.Tags));
     }
 
     [Fact]
@@ -2568,7 +2786,7 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
             }
         }
 
-        Assert.Empty(LogMessages.Where(message => message.LogLevel == LogLevel.Error));
+        Assert.DoesNotContain(LogMessages, message => message.LogLevel == LogLevel.Error);
     }
 
     [Fact]
@@ -2597,7 +2815,9 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
     [Fact]
     public async Task AppAbortIsLogged()
     {
-        var testContext = new TestServiceContext(LoggerFactory);
+        var testMeterFactory = new TestMeterFactory();
+        using var connectionDuration = new MetricCollector<double>(testMeterFactory, "Microsoft.AspNetCore.Server.Kestrel", "kestrel.connection.duration");
+        var testContext = new TestServiceContext(LoggerFactory, metrics: new KestrelMetrics(testMeterFactory));
 
         await using (var server = new TestServer(httpContext =>
         {
@@ -2617,6 +2837,8 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
         }
 
         Assert.Single(LogMessages.Where(m => m.Message.Contains(CoreStrings.ConnectionAbortedByApplication)));
+
+        Assert.Collection(connectionDuration.GetMeasurementSnapshot(), m => MetricsAssert.Equal(ConnectionEndReason.AbortedByApp, m.Tags));
     }
 
     [Fact]
@@ -4342,6 +4564,112 @@ public class ResponseTests : TestApplicationErrorLoggerLoggedTest
                     "",
                     "");
             }
+        }
+    }
+
+    [Fact]
+    public async Task WriteBeforeFlushingHeadersTracksBytesCorrectly()
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new TestServer(async context =>
+        {
+            try
+            {
+                var length = 0;
+                var memory = context.Response.BodyWriter.GetMemory();
+                context.Response.BodyWriter.Advance(memory.Length);
+                length += memory.Length;
+                Assert.Equal(length, context.Response.BodyWriter.UnflushedBytes);
+
+                memory = context.Response.BodyWriter.GetMemory();
+                context.Response.BodyWriter.Advance(memory.Length);
+                length += memory.Length;
+
+                Assert.Equal(length, context.Response.BodyWriter.UnflushedBytes);
+
+                await context.Response.BodyWriter.FlushAsync();
+
+                Assert.Equal(0, context.Response.BodyWriter.UnflushedBytes);
+
+                tcs.SetResult();
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        });
+
+        using (var connection = server.CreateConnection())
+        {
+            await connection.Send(
+                "GET / HTTP/1.1",
+                "Host:",
+                "",
+                "");
+
+            await connection.Receive(
+                "HTTP/1.1 200 OK",
+                $"Date: {server.Context.DateHeaderValue}",
+                "Transfer-Encoding: chunked",
+                "");
+
+            await tcs.Task;
+        }
+    }
+
+    [Fact]
+    public async Task WriteAfterFlushingHeadersTracksBytesCorrectly()
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new TestServer(async context =>
+        {
+            try
+            {
+                await context.Response.StartAsync();
+                // StartAsync doesn't actually flush, it just commits bytes to Pipe
+                // going to flush here so we have 0 unflushed bytes to make asserts below easier
+                await context.Response.BodyWriter.FlushAsync();
+
+                var length = 0;
+                var memory = context.Response.BodyWriter.GetMemory();
+                context.Response.BodyWriter.Advance(memory.Length);
+                length += memory.Length;
+                Assert.Equal(length, context.Response.BodyWriter.UnflushedBytes);
+
+                memory = context.Response.BodyWriter.GetMemory();
+                context.Response.BodyWriter.Advance(memory.Length);
+                length += memory.Length;
+
+                // + 7 for first chunked framing (ff9\r\n<data>\r\n)
+                Assert.Equal(length + 7, context.Response.BodyWriter.UnflushedBytes);
+
+                await context.Response.BodyWriter.FlushAsync();
+
+                Assert.Equal(0, context.Response.BodyWriter.UnflushedBytes);
+
+                tcs.SetResult();
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        });
+
+        using (var connection = server.CreateConnection())
+        {
+            await connection.Send(
+                "GET / HTTP/1.1",
+                "Host:",
+                "",
+                "");
+
+            await connection.Receive(
+                "HTTP/1.1 200 OK",
+                $"Date: {server.Context.DateHeaderValue}",
+                "Transfer-Encoding: chunked",
+                "");
+
+            await tcs.Task;
         }
     }
 

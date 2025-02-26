@@ -3,18 +3,17 @@
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Testing;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Microsoft.AspNetCore.RateLimiting;
 
 public class RateLimitingApplicationBuilderExtensionsTests : LoggedTest
 {
-
     [Fact]
     public void UseRateLimiter_ThrowsOnNullAppBuilder()
     {
-        Assert.Throws<ArgumentNullException>(() => RateLimitingApplicationBuilderExtensions.UseRateLimiter(null));
+        Assert.Throws<ArgumentNullException>(() => RateLimiterApplicationBuilderExtensions.UseRateLimiter(null));
     }
 
     [Fact]
@@ -25,19 +24,31 @@ public class RateLimitingApplicationBuilderExtensionsTests : LoggedTest
     }
 
     [Fact]
+    public void UseRateLimiter_RequireServices()
+    {
+        var services = new ServiceCollection();
+        var serviceProvider = services.BuildServiceProvider();
+        var appBuilder = new ApplicationBuilder(serviceProvider);
+
+        // Act
+        var ex = Assert.Throws<InvalidOperationException>(() => appBuilder.UseRateLimiter());
+        Assert.Equal("Unable to find the required services. Please add all the required services by calling 'IServiceCollection.AddRateLimiter' in the application startup code.", ex.Message);
+    }
+
+    [Fact]
     public void UseRateLimiter_RespectsOptions()
     {
         // These are the options that should get used
         var options = new RateLimiterOptions();
-        options.DefaultRejectionStatusCode = 429;
-        options.Limiter = new TestPartitionedRateLimiter<HttpContext>(new TestRateLimiter(false));
+        options.RejectionStatusCode = 429;
+        options.GlobalLimiter = new TestPartitionedRateLimiter<HttpContext>(new TestRateLimiter(false));
 
         // These should not get used
         var services = new ServiceCollection();
-        services.Configure<RateLimiterOptions>(options =>
+        services.AddRateLimiter(options =>
         {
-            options.Limiter = new TestPartitionedRateLimiter<HttpContext>(new TestRateLimiter(false));
-            options.DefaultRejectionStatusCode = 404;
+            options.GlobalLimiter = new TestPartitionedRateLimiter<HttpContext>(new TestRateLimiter(false));
+            options.RejectionStatusCode = 404;
         });
         services.AddLogging();
         var serviceProvider = services.BuildServiceProvider();
@@ -49,5 +60,24 @@ public class RateLimitingApplicationBuilderExtensionsTests : LoggedTest
         var context = new DefaultHttpContext();
         app.Invoke(context);
         Assert.Equal(429, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UseRateLimiter_DoNotThrowWithoutOptions()
+    {
+        var services = new ServiceCollection();
+        services.AddRateLimiter();
+        services.AddLogging();
+        var serviceProvider = services.BuildServiceProvider();
+        var appBuilder = new ApplicationBuilder(serviceProvider);
+
+        // Act
+        appBuilder.UseRateLimiter();
+        var app = appBuilder.Build();
+        var context = new DefaultHttpContext();
+        var exception = await Record.ExceptionAsync(() => app.Invoke(context));
+
+        // Assert
+        Assert.Null(exception);
     }
 }
